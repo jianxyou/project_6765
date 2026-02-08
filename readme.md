@@ -1,16 +1,20 @@
-# DocMerger: Adaptive Hierarchical Patch Compression for Multi-Vector Visual Document Retrieval
+# DocMerger: Adaptive Hierarchical Patch Merging for Multi-Vector Visual Document Retrieval
 
 ## Overview
 
 Multi-vector Visual Document Retrieval (VDR) systems represent each document page as hundreds of patch-level embeddings, achieving state-of-the-art retrieval quality but incurring prohibitive storage overhead. Recent work (DocPruner) addresses this via adaptive pruning, but permanently discards information, leading to sharp performance degradation at high compression ratios (>60%).
 
-**DocMerger** combines adaptive hierarchical patch compression with reinforcement learning to achieve superior performance–storage trade-offs, especially at high compression ratios (60–80%).
+**DocMerger** introduces adaptive hierarchical patch merging to achieve superior performance–storage trade-offs, especially at high compression ratios (60–80%).
 
-### Key Ideas
+### Key Idea
 
-1. **Importance-Aware Tri-Level Partitioning**: Instead of binary keep/discard, patches are split into three tiers — *preserve* (high importance), *merge* (mid importance), and *discard* (low importance). The merge tier retains partial information via attention-weighted clustering rather than throwing it away entirely.
+**Importance-Aware Tri-Level Partitioning**: Instead of DocPruner's binary keep/discard decision, patches are split into three tiers based on attention-derived importance scores:
 
-2. **RL-Based Adaptive Compression Policy**: A lightweight policy network trained via GRPO learns document-specific compression parameters (partition thresholds + cluster count), directly optimizing retrieval performance (nDCG@5) under storage budgets.
+- **Preserve** (high importance): Keep original embeddings untouched
+- **Merge** (mid importance): Combine via attention-weighted clustering — retains partial information instead of discarding
+- **Discard** (low importance): Remove entirely
+
+This hybrid strategy leverages the strengths of both pruning and merging. At moderate compression, it behaves like adaptive pruning. At high compression, the merge tier prevents the information cliff that pure pruning suffers from.
 
 ## Project Structure
 
@@ -28,10 +32,6 @@ docmerger/
 │   │   ├── docpruner.py        # DocPruner baseline (binary adaptive pruning)
 │   │   ├── docmerger.py        # Our method (tri-level partition + weighted merging)
 │   │   └── baselines.py        # Non-adaptive baselines (random, sem-cluster, pooling)
-│   ├── rl/                     # RL policy for adaptive compression
-│   │   ├── policy.py           # MLP policy network
-│   │   ├── grpo.py             # GRPO training loop
-│   │   └── reward.py           # Reward computation (nDCG@5 + compression ratio)
 │   ├── retrieval/              # Scoring and evaluation
 │   │   ├── maxsim.py           # MaxSim late-interaction scoring
 │   │   └── metrics.py          # nDCG@5 and other IR metrics
@@ -42,10 +42,8 @@ docmerger/
 │   ├── 00_verify_base_model.py       # Phase 0: verify base model nDCG@5
 │   ├── 01_extract_embeddings.py      # Phase 0: extract & cache all embeddings + attentions
 │   ├── 02_run_baselines.py           # Phase 1: run all baseline compression methods
-│   ├── 03_run_docmerger_rule.py      # Phase 2: run rule-based DocMerger
-│   ├── 04_train_rl_policy.py         # Phase 3: train GRPO policy
-│   ├── 05_run_docmerger_rl.py        # Phase 3: evaluate RL-based DocMerger
-│   └── 06_plot_results.py            # Phase 4: generate figures and tables
+│   ├── 03_run_docmerger.py           # Phase 2: run DocMerger with grid search over (k1, k2, C)
+│   └── 04_plot_results.py            # Phase 3: generate figures and tables
 └── results/                    # Experiment outputs (metrics JSON, figures)
     ├── embeddings/             # Cached embeddings (gitignored)
     └── figures/
@@ -64,7 +62,7 @@ docmerger/
 
 **Goal**: Confirm the evaluation pipeline works end-to-end.
 
-- [ ] Install dependencies (`colpali-engine`, `vidore-benchmark`, `datasets`, etc.)
+- [ ] Install dependencies (`colpali-engine`, `datasets`, `pytrec_eval`, etc.)
 - [ ] Load ColQwen2.5 and run inference on ViDoRe-V2
 - [ ] Verify base model nDCG@5 matches DocPruner's reported number (~0.5508)
 - [ ] Extract and cache all document embeddings + last-layer attention weights
@@ -90,53 +88,41 @@ Deliverables:
 - [ ] nDCG@5 vs. compression ratio curve for all methods
 - [ ] Confirm DocPruner results align with paper (k=-0.25: ~51.5% pruning, nDCG@5 ≈ 0.547)
 
-### Phase 2 — DocMerger: Rule-Based (Day 8–14)
+### Phase 2 — DocMerger: Adaptive Merging (Day 8–14)
 
-**Goal**: Validate the core hypothesis that tri-level partitioning outperforms binary pruning at high compression.
+**Goal**: Validate the core hypothesis — adaptive merging outperforms pure pruning at high compression.
 
 **2a. Tri-Level Partitioning**
 ```
-P_preserve = { d_j | I(d_j) > μ + k1·σ }       → keep original embeddings
-P_merge    = { d_j | μ - k2·σ < I(d_j) ≤ μ + k1·σ }  → merge via clustering
-P_discard  = { d_j | I(d_j) ≤ μ - k2·σ }       → discard
+P_preserve = { d_j | I(d_j) > μ + k1·σ }              → keep original embeddings
+P_merge    = { d_j | μ - k2·σ < I(d_j) ≤ μ + k1·σ }   → merge via clustering
+P_discard  = { d_j | I(d_j) ≤ μ - k2·σ }              → discard
 ```
+
+Grid search over:
+- k1 ∈ {-0.25, 0, 0.25, 0.5, 0.75, 1.0}
+- k2 ∈ {-0.25, 0, 0.25, 0.5, 0.75, 1.0}
+- C (cluster count or merging factor for P_merge)
 
 **2b. Attention-Weighted Merging**
 - Agglomerative clustering (cosine distance) on P_merge
-- Cluster centroids computed as importance-weighted averages (not simple mean)
+- Cluster centroids computed as importance-weighted averages:
+  `centroid_c = Σ I(d_j)·d_j / Σ I(d_j)` for d_j in cluster c
 
 **2c. Ablation Studies**
 - [ ] Tri-level vs. binary (DocPruner): does the merge tier help?
 - [ ] Attention-weighted vs. simple-average merging: does weighting matter?
-- [ ] Sensitivity to k1, k2, and cluster count C
+- [ ] Sensitivity analysis over k1, k2, and C
 
-**Key Hypothesis**: At 60–80% compression, DocMerger should significantly outperform DocPruner because merged patches retain partial information that pure pruning discards.
+**Key Hypothesis**: At 60–80% compression, DocMerger significantly outperforms DocPruner because merged patches retain partial information that pure pruning discards.
 
-### Phase 3 — DocMerger: RL Policy (Day 12–18)
-
-**Goal**: Replace hand-tuned (k1, k2, C) with a learned, document-specific policy.
-
-**MDP Formulation (contextual bandit)**:
-- **State**: [μ_d, σ_d, skew_d, kurt_d, H(p_d), L_d] — statistics of each document's attention distribution
-- **Action**: (k1, k2, C) — discretized compression parameters
-- **Reward**: nDCG@5(d) + λ · (1 - |D'|/|D|)
-
-**Training**:
-- Policy: 3-layer MLP (128 hidden units)
-- Algorithm: GRPO (Group Relative Policy Optimization)
-- Warm start: supervised imitation of best rule-based parameters
-- KL regularization toward rule-based policy to prevent collapse
-
-Deliverables:
-- [ ] RL policy converges and outperforms best fixed parameters
-- [ ] Analysis of learned document-specific strategies (e.g., aggressive pruning on title pages vs. conservative merging on dense text)
-
-### Phase 4 — Results & Extension (Day 18–21)
+### Phase 3 — Results & Extension (Day 15–21)
 
 - [ ] Final nDCG@5 vs. compression ratio plot with all methods
+- [ ] Per-dataset breakdown (4 ViDoRe-V2 subsets)
 - [ ] Ablation table
-- [ ] Extend pipeline to ColNomic (Jina V4 deferred)
-- [ ] Note: DocPruner observed that merging is unexpectedly strong on Jina V4 — our method may show even larger gains there
+- [ ] Extend to ColNomic (Jina V4 deferred)
+- [ ] Note: DocPruner found merging unexpectedly strong on Jina V4 — our adaptive merging may show even larger gains there
 
 ## Implementation Notes
 
@@ -163,7 +149,7 @@ results/embeddings/
 │   └── vidore_v2_metadata.json           # patch counts, dims, etc.
 ```
 
-All compression experiments then operate on cached embeddings — no GPU needed for Phase 1–2 experiments (except for initial extraction).
+All compression experiments then operate on cached embeddings — no GPU needed after initial extraction.
 
 ### Key Technical Questions to Resolve
 
@@ -176,6 +162,5 @@ All compression experiments then operate on cached embeddings — no GPU needed 
 - [DocPruner](https://arxiv.org/abs/2509.23883) — Yan et al., 2025. Adaptive patch-level embedding pruning for VDR.
 - [ColPali](https://arxiv.org/abs/2407.01449) — Faysse et al., 2024. Efficient document retrieval with VLMs.
 - [ViDoRe-V2](https://arxiv.org/abs/2505.17166) — Macé et al., 2025. Visual document retrieval benchmark.
-- [GRPO](https://arxiv.org/abs/2402.03300) — Shao et al., 2024. Group relative policy optimization.
 - [vidore-benchmark](https://github.com/illuin-tech/vidore-benchmark) — Official evaluation codebase.
 - [colpali-engine](https://github.com/illuin-tech/colpali) — Model implementations for ColPali, ColQwen2, etc.
