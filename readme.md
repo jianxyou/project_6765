@@ -39,7 +39,7 @@ docmerger/
 
 ## Experiment Plan
 
-### Phase 1 — Setup & Embedding Extraction (Week 1–2)
+### Phase 1 — Setup & Embedding Extraction 
 
 **Goal**: Pipeline works end-to-end, embeddings cached.
 
@@ -50,7 +50,7 @@ docmerger/
 
 **Division of work**: One person handles model + extraction, another handles data loading + metrics pipeline.
 
-### Phase 2 — Baselines (Week 3–4)
+### Phase 2 — Baselines
 
 **Goal**: Reproduce key baselines to compare against.
 
@@ -67,7 +67,7 @@ Each method is swept across multiple compression ratios to produce the nDCG@5 vs
 
 **Division of work**: One person implements DocPruner, another implements random + sem-cluster. Scoring pipeline is shared.
 
-### Phase 3 — DocMerger (Week 5–6)
+### Phase 3 — DocMerger 
 
 **Goal**: Implement and evaluate our method, show improvement at high compression.
 
@@ -170,3 +170,4 @@ Buffer: 2 months = ~8 weeks. This plan uses all 8 with no slack, but phases over
 - [ViDoRe-V2](https://arxiv.org/abs/2505.17166) — Macé et al., 2025
 - [vidore-benchmark](https://github.com/illuin-tech/vidore-benchmark)
 - [colpali-engine](https://github.com/illuin-tech/colpali)
+
