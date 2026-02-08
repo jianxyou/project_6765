@@ -58,7 +58,7 @@ docmerger/
 - **Metric**: nDCG@5
 - **Hardware**: NVIDIA A100 80GB
 
-### Phase 0 — Environment Setup & Base Model Verification (Day 1–2)
+### Phase 0 — Environment Setup & Base Model Verification 
 
 **Goal**: Confirm the evaluation pipeline works end-to-end.
 
@@ -68,7 +68,7 @@ docmerger/
 - [ ] Extract and cache all document embeddings + last-layer attention weights
 - [ ] Profile: number of patches per document, embedding dimensions, attention shape
 
-### Phase 1 — Reproduce DocPruner & Baselines (Day 3–7)
+### Phase 1 — Reproduce DocPruner & Baselines 
 
 **Goal**: Reproduce DocPruner's Figure 2 (left panel) for ColQwen2.5 on ViDoRe-V2.
 
@@ -88,7 +88,7 @@ Deliverables:
 - [ ] nDCG@5 vs. compression ratio curve for all methods
 - [ ] Confirm DocPruner results align with paper (k=-0.25: ~51.5% pruning, nDCG@5 ≈ 0.547)
 
-### Phase 2 — DocMerger: Adaptive Merging (Day 8–14)
+### Phase 2 — DocMerger: Adaptive Merging
 
 **Goal**: Validate the core hypothesis — adaptive merging outperforms pure pruning at high compression.
 
@@ -164,3 +164,4 @@ All compression experiments then operate on cached embeddings — no GPU needed 
 - [ViDoRe-V2](https://arxiv.org/abs/2505.17166) — Macé et al., 2025. Visual document retrieval benchmark.
 - [vidore-benchmark](https://github.com/illuin-tech/vidore-benchmark) — Official evaluation codebase.
 - [colpali-engine](https://github.com/illuin-tech/colpali) — Model implementations for ColPali, ColQwen2, etc.
+
