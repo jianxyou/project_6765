@@ -1,0 +1,31 @@
+# Outputs and cache
+outputs_*/
+/outputs/
+
+# Model cache
+*.pt
+*.bin
+*.safetensors
+
+# HuggingFace cache
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*.out
+*.err
