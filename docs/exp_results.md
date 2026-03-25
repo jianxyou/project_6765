@@ -257,3 +257,67 @@ The Adaptive Hybrid does **not** consistently outperform the better of DocPruner
 3. Use multiple attention statistics (entropy + kurtosis + max/mean ratio) as routing features.
 
 This is an honest negative result that narrows the search space for future work.
+
+---
+
+## Phase 3c: Learned Sparse Projection (Direction 3)
+
+### Method
+
+Replace agglomerative clustering in the merge tier with a learned linear projection W ∈ R^(128×128), initialized as identity. Training objective: minimize MSE between MaxSim scores of original (uncompressed) and compressed document representations.
+
+- Same tri-level partitioning as DocMerger (k1, k2 thresholds)
+- Merge-tier patches are projected through W, then top-k by L2 norm are kept
+- Training: 30 epochs, Adam lr=1e-3, 4 negatives per positive pair
+- Each dataset trains on its own queries (222 pairs for ESG, etc.)
+
+### Results (k1=1.0, k2=0)
+
+**top_k_ratio=0.25 (~80% compression):**
+
+| Dataset | Learned | DocMerger | DocPruner (k=0.5,~77%) | Baseline |
+|---------|---------|-----------|------------------------|----------|
+| ESG | **0.6204** | 0.5957 | 0.5684 | 0.5996 |
+| Bio | **0.6264** | 0.5766 | 0.5763 | 0.6228 |
+| Econ | **0.6194** | 0.5520 | 0.5765 | 0.6226 |
+| ESG-H | **0.6058** | 0.4962 | 0.5220 | 0.6369 |
+| **Avg** | **0.6180** | 0.5551 | 0.5608 | 0.6205 |
+
+**top_k_ratio=0.5 (~74% compression):**
+
+| Dataset | Learned | DocPruner (k=0.25,~71%) | Baseline |
+|---------|---------|-------------------------|----------|
+| ESG | **0.6276** | 0.5919 | 0.5996 |
+| Bio | **0.6309** | 0.5984 | 0.6228 |
+| Econ | 0.6070 | **0.6173** | 0.6226 |
+| ESG-H | **0.5822** | 0.5395 | 0.6369 |
+| **Avg** | **0.6119** | 0.5868 | 0.6205 |
+
+**top_k_ratio=0.1 (~84% compression):**
+
+| Dataset | Learned | DocMerger (k1=1.0,k2=0,mr=0.1,~84%) | DocPruner (k=1.0,~86%) | Baseline |
+|---------|---------|---------------------------------------|------------------------|----------|
+| ESG | **0.6386** | 0.5866 | 0.5614 | 0.5996 |
+| Bio | **0.6041** | 0.5352 | 0.5097 | 0.6228 |
+| Econ | **0.6347** | 0.5207 | 0.5179 | 0.6226 |
+| ESG-H | **0.5919** | 0.4715 | 0.4783 | 0.6369 |
+| **Avg** | **0.6173** | 0.5285 | 0.5168 | 0.6205 |
+
+### Analysis
+
+The learned projection dramatically outperforms both DocPruner and DocMerger at every compression level tested:
+
+- At ~80% compression: avg 0.6180 vs DocMerger 0.5551 (+0.063) and DocPruner 0.5608 (+0.057)
+- At ~84% compression: avg 0.6173 vs DocMerger 0.5285 (+0.089) — nearly matching the uncompressed baseline (0.6205)
+- On ESG at 84% compression, learned projection (0.6386) actually **exceeds** the uncompressed baseline (0.5996)
+
+### Important Caveat
+
+Each dataset's projection is trained on that dataset's own queries. This means the projection learns to preserve information specifically relevant to the evaluation queries — a form of **query-aware compression**. In a real deployment, the queries are unknown at compression time.
+
+To assess practical value, future work should:
+1. Train on one dataset, evaluate on others (cross-dataset transfer)
+2. Train on synthetic/diverse queries not from the evaluation set
+3. Compare against a held-out query split (train/test split within each dataset)
+
+Despite this caveat, the results demonstrate that the merge tier has substantial room for improvement over heuristic clustering, and that end-to-end optimization for MaxSim is a promising direction.

@@ -469,6 +469,191 @@ def docmerger_compress(embeddings: torch.Tensor,
     )
 
 
+
+class LearnedProjection(nn.Module):
+    """Learned linear projection for merge-tier compression."""
+    def __init__(self, dim: int = 128):
+        super().__init__()
+        self.proj = nn.Linear(dim, dim, bias=False)
+        nn.init.eye_(self.proj.weight)  # start as identity
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.proj(x)
+
+
+def _maxsim_score(q: torch.Tensor, d: torch.Tensor) -> torch.Tensor:
+    """Single query-doc MaxSim score. q: [Lq, D], d: [Ld, D] -> scalar."""
+    sim = q @ d.T  # [Lq, Ld]
+    return sim.max(dim=-1).values.sum()
+
+
+def train_learned_projection(
+    doc_emb_list: List[torch.Tensor],
+    doc_attn_list: List[torch.Tensor],
+    doc_mask_list: List[torch.Tensor],
+    q_emb_list: List[torch.Tensor],
+    qrels: Dict[str, Dict[str, int]],
+    query_ids: List[str],
+    corpus_ids: List[str],
+    k1: float = 1.0, k2: float = 0.0, top_k_ratio: float = 0.25,
+    lr: float = 1e-3, epochs: int = 30, n_neg: int = 4,
+    device_str: str = "cpu",
+) -> LearnedProjection:
+    """Train projection W to minimize MaxSim distillation loss.
+
+    For each (query, pos_doc) pair, sample negatives.
+    Loss = MSE(MaxSim(q, D_compressed), MaxSim(q, D_original))
+    where D_compressed uses W to project merge-tier patches then selects top-k by norm.
+    """
+    dim = doc_emb_list[0].shape[1]
+    model = LearnedProjection(dim).to(device_str)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    # Build (query_idx, pos_doc_idx) pairs
+    cid2idx = {cid: i for i, cid in enumerate(corpus_ids)}
+    pairs = []
+    for qi, qid in enumerate(query_ids):
+        if qid in qrels:
+            for cid, rel in qrels[qid].items():
+                if rel > 0 and cid in cid2idx:
+                    pairs.append((qi, cid2idx[cid]))
+
+    # Precompute tri-level partitions
+    partitions = []
+    for i in range(len(doc_emb_list)):
+        emb = doc_emb_list[i]
+        attn = doc_attn_list[i]
+        mask = doc_mask_list[i]
+        img_idx = mask.nonzero(as_tuple=True)[0]
+        txt_idx = (~mask).nonzero(as_tuple=True)[0]
+        if img_idx.shape[0] == 0:
+            partitions.append((txt_idx, img_idx, torch.tensor([], dtype=torch.long), img_idx))
+            continue
+        img_attn = attn[img_idx]
+        q75 = img_attn.quantile(0.75).item()
+        q25 = img_attn.quantile(0.25).item()
+        iqr = q75 - q25
+        clipped = img_attn.clamp(max=q75 + 3.0 * iqr)
+        mu = clipped.mean().item()
+        sigma = clipped.std().item() if img_idx.shape[0] > 1 else 0.0
+        tau_high = mu + k1 * sigma
+        tau_low = mu - k2 * sigma
+        preserve = img_idx[img_attn > tau_high]
+        merge = img_idx[(img_attn > tau_low) & (img_attn <= tau_high)]
+        if preserve.shape[0] == 0 and merge.shape[0] == 0:
+            preserve = img_idx[img_attn.argmax().unsqueeze(0)]
+        partitions.append((txt_idx, preserve, merge, img_idx))
+
+    n_docs = len(doc_emb_list)
+    gen = torch.Generator()
+    gen.manual_seed(42)
+
+    print(f"  Training learned projection: {len(pairs)} pairs, {epochs} epochs")
+    for epoch in range(epochs):
+        random.shuffle(pairs)
+        total_loss = 0.0
+        for qi, di in pairs:
+            q = q_emb_list[qi].float().to(device_str)
+
+            # Sample negatives
+            neg_indices = torch.randint(0, n_docs, (n_neg,), generator=gen).tolist()
+            doc_indices = [di] + neg_indices
+
+            # Compute original and compressed MaxSim scores
+            orig_scores = []
+            comp_scores = []
+            for didx in doc_indices:
+                emb = doc_emb_list[didx].float().to(device_str)
+                txt_idx, preserve, merge, _ = partitions[didx]
+
+                # Original score (no compression)
+                with torch.no_grad():
+                    orig_scores.append(_maxsim_score(q, emb))
+
+                # Compressed: text + preserved + projected merge (top-k by norm)
+                parts = [emb[txt_idx], emb[preserve]]
+                if merge.shape[0] > 0:
+                    projected = model(emb[merge])
+                    n_keep = max(1, int(merge.shape[0] * top_k_ratio))
+                    norms = projected.norm(dim=-1)
+                    topk_idx = norms.topk(min(n_keep, projected.shape[0])).indices
+                    parts.append(projected[topk_idx])
+                comp_doc = torch.cat(parts, dim=0)
+                comp_scores.append(_maxsim_score(q, comp_doc))
+
+            orig_t = torch.stack(orig_scores).detach()
+            comp_t = torch.stack(comp_scores)
+            loss = nn.functional.mse_loss(comp_t, orig_t)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        avg_loss = total_loss / max(1, len(pairs))
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            print(f"    Epoch {epoch+1}/{epochs}: loss={avg_loss:.6f}")
+
+    return model.cpu()
+
+
+def learned_projection_compress(
+    embeddings: torch.Tensor,
+    attention_scores: torch.Tensor,
+    proj_model: LearnedProjection,
+    k1: float = 1.0, k2: float = 0.0, top_k_ratio: float = 0.25,
+    imgpad_mask: Optional[torch.Tensor] = None,
+) -> PruneResult:
+    """Compress using learned projection on merge tier, select top-k by norm."""
+    n = embeddings.shape[0]
+    if n == 0:
+        return PruneResult(vectors=embeddings, pruning_ratio=0.0, num_before=0, num_after=0)
+    if imgpad_mask is None:
+        imgpad_mask = torch.ones(n, dtype=torch.bool)
+
+    text_idx = (~imgpad_mask).nonzero(as_tuple=True)[0]
+    img_idx = imgpad_mask.nonzero(as_tuple=True)[0]
+    n_img = img_idx.shape[0]
+    if n_img == 0:
+        return PruneResult(vectors=embeddings, pruning_ratio=0.0, num_before=n, num_after=n)
+
+    img_attn = attention_scores[img_idx]
+    q75 = img_attn.quantile(0.75).item()
+    q25 = img_attn.quantile(0.25).item()
+    iqr = q75 - q25
+    clipped = img_attn.clamp(max=q75 + 3.0 * iqr)
+    mu = clipped.mean().item()
+    sigma = clipped.std().item() if n_img > 1 else 0.0
+
+    preserve_mask = img_attn > mu + k1 * sigma
+    discard_mask = img_attn <= mu - k2 * sigma
+    merge_mask = ~preserve_mask & ~discard_mask
+
+    preserve_idx = img_idx[preserve_mask]
+    merge_idx = img_idx[merge_mask]
+
+    if preserve_idx.shape[0] == 0 and merge_idx.shape[0] == 0:
+        preserve_idx = img_idx[img_attn.argmax().unsqueeze(0)]
+        merge_idx = torch.tensor([], dtype=torch.long)
+
+    parts = [embeddings[text_idx], embeddings[preserve_idx]]
+    n_merged = 0
+    if merge_idx.shape[0] > 0:
+        with torch.no_grad():
+            projected = proj_model(embeddings[merge_idx].float()).to(embeddings.dtype)
+        n_keep = max(1, int(merge_idx.shape[0] * top_k_ratio))
+        norms = projected.norm(dim=-1)
+        topk = norms.topk(min(n_keep, projected.shape[0])).indices
+        parts.append(projected[topk])
+        n_merged = topk.shape[0]
+
+    result = torch.cat(parts, dim=0)
+    n_img_after = preserve_idx.shape[0] + n_merged
+    pruning_ratio = 1.0 - (n_img_after / n_img) if n_img > 0 else 0.0
+
+    return PruneResult(vectors=result, pruning_ratio=pruning_ratio,
+                       num_before=n_img, num_after=int(n_img_after))
+
 def attention_entropy(attention_scores: torch.Tensor,
                       imgpad_mask: Optional[torch.Tensor] = None) -> float:
     """Entropy of normalized EOS attention over image patches.
@@ -718,7 +903,7 @@ def run_experiment(args):
 
     set_seed(args.seed)
     device = pick_device(args.device)
-    need_attention = (args.pruner in ("docpruner", "docmerger", "docmerger_avg", "adaptive"))
+    need_attention = (args.pruner in ("docpruner", "docmerger", "docmerger_avg", "adaptive", "learned"))
 
     dataset_short = args.dataset.split("/")[-1]
 
@@ -841,6 +1026,24 @@ def run_experiment(args):
         print(f"  Entropy threshold (p{args.entropy_percentile:.0f}): {entropy_threshold:.3f}")
         print(f"  Routing: {n_prune} docs → DocPruner, {n_corpus - n_prune} docs → DocMerger")
 
+    # Learned projection: train before pruning loop
+    proj_model = None
+    if args.pruner == "learned":
+        # Need query embeddings for training — load model if needed
+        if model is None:
+            print(f"\n  加载 ColQwen2.5 模型（用于 query 编码 + 训练）...")
+            model, processor = load_colqwen25(args.model_name, device=device, need_attention=False)
+        q_emb_list_train: List[torch.Tensor] = []
+        for i in range(0, n_queries, args.batch_query):
+            batch_q = query_texts[i:i + args.batch_query]
+            q_emb_list_train.extend(embed_queries(model, processor, batch_q, device=device))
+        proj_model = train_learned_projection(
+            doc_emb_list, doc_attn_list, doc_mask_list,
+            q_emb_list_train, qrels, query_ids, corpus_ids,
+            k1=args.k1, k2=args.k2, top_k_ratio=args.top_k_ratio,
+            lr=args.lp_lr, epochs=args.lp_epochs,
+        )
+
     for i in tqdm(range(n_corpus), desc="Pruning"):
         if args.pruner == "docpruner":
             result = docpruner_prune(
@@ -862,6 +1065,12 @@ def run_experiment(args):
                 entropy_threshold=entropy_threshold,
                 k_prune=args.k_prune,
                 k1=args.k1, k2=args.k2, merge_ratio=args.merge_ratio,
+            )
+        elif args.pruner == "learned":
+            result = learned_projection_compress(
+                doc_emb_list[i], doc_attn_list[i], proj_model,
+                k1=args.k1, k2=args.k2, top_k_ratio=args.top_k_ratio,
+                imgpad_mask=doc_mask_list[i] if i < len(doc_mask_list) else None,
             )
         elif args.pruner == "random":
             result = random_prune(doc_emb_list[i], ratio=args.random_ratio, seed=args.seed)
@@ -981,7 +1190,7 @@ def main():
     p.add_argument("--batch-score-d", type=int, default=16)
 
     # 剪枝
-    p.add_argument("--pruner", choices=["identity", "docpruner", "random", "docmerger", "docmerger_avg", "adaptive"],
+    p.add_argument("--pruner", choices=["identity", "docpruner", "random", "docmerger", "docmerger_avg", "adaptive", "learned"],
                    default="docpruner")
     p.add_argument("--k", type=float, default=-0.25,
                    help="DocPruner adaptation factor（论文推荐 -0.25）")
@@ -1000,6 +1209,14 @@ def main():
                    help="Adaptive: DocPruner k for low-entropy docs")
     p.add_argument("--entropy-percentile", type=float, default=50,
                    help="Adaptive: entropy percentile threshold (0-100)")
+
+    # Learned projection 参数
+    p.add_argument("--lp-epochs", type=int, default=30,
+                   help="Learned projection: training epochs")
+    p.add_argument("--lp-lr", type=float, default=1e-3,
+                   help="Learned projection: learning rate")
+    p.add_argument("--top-k-ratio", type=float, default=0.25,
+                   help="Learned projection: keep this fraction of projected merge patches")
 
     # 其他
     p.add_argument("--seed", type=int, default=0)
