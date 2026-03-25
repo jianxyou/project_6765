@@ -365,3 +365,18 @@ Key observations:
 4. The gap between same-dataset and transfer (0.07–0.13 at ~80%) confirms heavy overfitting.
 
 **Verdict**: The learned projection demonstrates the theoretical ceiling for merge-tier compression but is not practical without query-agnostic training. Future work should explore training on synthetic/diverse queries or using contrastive objectives that don't require specific query-document pairs.
+
+### Why the Projection Doesn't Transfer (Architecture vs Training Signal)
+
+The single linear layer (128→128) is intentionally simple, but the poor transfer is not about model capacity — it's about the training signal.
+
+The projection is trained to minimize `MSE(MaxSim(q, D_compressed), MaxSim(q, D_original))` using specific queries. This teaches W "which directions in embedding space matter for *these* queries" — an inherently query-specific signal. A deeper network would overfit even harder.
+
+Evidence that capacity is not the bottleneck: same-dataset scores are already 0.60–0.64 (near the uncompressed baseline of 0.62), meaning the single linear layer has plenty of capacity to solve the task. The gap is entirely in generalization.
+
+What would help more than adding layers:
+1. **Diverse query training** — train on thousands of synthetic queries (e.g., LLM-generated) so W learns generally useful projections rather than dataset-specific ones.
+2. **Query-agnostic objective** — minimize reconstruction error `||W(x) - x||` with sparsity regularization, so W learns to preserve the most informative dimensions regardless of queries.
+3. **Contrastive document loss** — push W to preserve inter-document similarity structure without requiring any queries at all.
+
+The 0.07–0.13 nDCG@5 gap between same-dataset and transfer is too large to close with architecture changes alone. The training protocol is the fundamental bottleneck.
