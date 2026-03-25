@@ -321,3 +321,47 @@ To assess practical value, future work should:
 3. Compare against a held-out query split (train/test split within each dataset)
 
 Despite this caveat, the results demonstrate that the merge tier has substantial room for improvement over heuristic clustering, and that end-to-end optimization for MaxSim is a promising direction.
+
+### Cross-Dataset Transfer (Honest Evaluation)
+
+Train W on one dataset's queries, evaluate on all 4 datasets. ★ = same dataset (overfitting). Transfer = average over the 3 unseen datasets.
+
+**~80% compression (top_k=0.25):**
+
+| Train on → | ESG | Bio | Econ | ESG-H | Avg Transfer |
+|------------|-------|-------|-------|-------|-------------|
+| ESG | ★0.6204 | 0.5250 | 0.5424 | 0.4176 | 0.4950 |
+| Bio | 0.5099 | ★0.6173 | 0.5550 | 0.4445 | 0.5031 |
+| Econ | 0.5510 | 0.4986 | ★0.6345 | 0.4100 | 0.4865 |
+| ESG-H | 0.5765 | 0.5193 | 0.5449 | ★0.6061 | 0.5469 |
+
+**~84% compression (top_k=0.1):**
+
+| Train on → | ESG | Bio | Econ | ESG-H | Avg Transfer |
+|------------|-------|-------|-------|-------|-------------|
+| ESG | ★0.6321 | 0.4865 | 0.5251 | 0.4397 | 0.4838 |
+| Bio | 0.3606 | ★0.6371 | 0.3930 | 0.1730 | 0.3089 |
+| Econ | 0.4809 | 0.4276 | ★0.6353 | 0.3755 | 0.4280 |
+| ESG-H | 0.5476 | 0.5103 | 0.5401 | ★0.6067 | 0.5327 |
+
+**Comparison with baselines (avg across all 4 datasets):**
+
+| Method | ~80% | ~84% |
+|--------|------|------|
+| DocPruner | 0.5608 | 0.5168 |
+| DocMerger | 0.5551 | 0.5285 |
+| Learned (same-dataset, overfitting) | **0.6180** | **0.6173** |
+| Learned (best transfer: train ESG-H) | 0.5469 | 0.5327 |
+| Learned (worst transfer: train Econ) | 0.4865 | 0.4280 |
+
+### Cross-Dataset Transfer Conclusion
+
+The learned projection **does not generalize** across datasets. Transfer performance (0.49–0.55 at ~80%) is consistently worse than both DocPruner (0.5608) and DocMerger (0.5551). The projection overfits to the training dataset's query distribution.
+
+Key observations:
+1. Same-dataset performance is excellent (0.60–0.64) — confirming the projection learns query-specific information.
+2. Transfer degrades severely, especially at higher compression (~84%) where Bio→others drops to 0.31 avg.
+3. ESG-H is the best source for transfer (0.5469 avg) — possibly because its queries are more diverse.
+4. The gap between same-dataset and transfer (0.07–0.13 at ~80%) confirms heavy overfitting.
+
+**Verdict**: The learned projection demonstrates the theoretical ceiling for merge-tier compression but is not practical without query-agnostic training. Future work should explore training on synthetic/diverse queries or using contrastive objectives that don't require specific query-document pairs.
