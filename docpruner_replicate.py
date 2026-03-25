@@ -469,6 +469,44 @@ def docmerger_compress(embeddings: torch.Tensor,
     )
 
 
+def attention_entropy(attention_scores: torch.Tensor,
+                      imgpad_mask: Optional[torch.Tensor] = None) -> float:
+    """Entropy of normalized EOS attention over image patches.
+    High → diffuse attention → prefer merging.
+    Low → concentrated attention → prefer pruning."""
+    if imgpad_mask is not None:
+        attn = attention_scores[imgpad_mask]
+    else:
+        attn = attention_scores
+    if attn.numel() == 0:
+        return 0.0
+    attn = attn.float().clamp(min=0)
+    total = attn.sum()
+    if total == 0:
+        return 0.0
+    p = attn / total
+    return -(p * torch.log(p + 1e-10)).sum().item()
+
+
+def adaptive_hybrid_compress(
+    embeddings: torch.Tensor,
+    attention_scores: torch.Tensor,
+    imgpad_mask: Optional[torch.Tensor],
+    entropy: float,
+    entropy_threshold: float,
+    k_prune: float = -0.25,
+    k1: float = 1.0, k2: float = 0.0, merge_ratio: float = 0.25,
+) -> PruneResult:
+    """Per-document routing: low entropy → DocPruner, high entropy → DocMerger."""
+    if entropy < entropy_threshold:
+        return docpruner_prune(embeddings, attention_scores, k=k_prune,
+                               imgpad_mask=imgpad_mask)
+    else:
+        return docmerger_compress(embeddings, attention_scores,
+                                  k1=k1, k2=k2, merge_ratio=merge_ratio,
+                                  imgpad_mask=imgpad_mask)
+
+
 # =============================================================================
 # MaxSim 检索（Late Interaction）
 # =============================================================================
@@ -680,7 +718,7 @@ def run_experiment(args):
 
     set_seed(args.seed)
     device = pick_device(args.device)
-    need_attention = (args.pruner in ("docpruner", "docmerger", "docmerger_avg"))
+    need_attention = (args.pruner in ("docpruner", "docmerger", "docmerger_avg", "adaptive"))
 
     dataset_short = args.dataset.split("/")[-1]
 
@@ -789,6 +827,20 @@ def run_experiment(args):
     pruned_docs: List[torch.Tensor] = []
     per_doc_stats = []
 
+    # Adaptive hybrid: two-pass (compute entropies first, then route)
+    entropy_threshold = None
+    doc_entropies = None
+    if args.pruner == "adaptive":
+        doc_entropies = []
+        for i in range(n_corpus):
+            mask_i = doc_mask_list[i] if i < len(doc_mask_list) else None
+            doc_entropies.append(attention_entropy(doc_attn_list[i], mask_i))
+        ent_tensor = torch.tensor(doc_entropies)
+        entropy_threshold = torch.quantile(ent_tensor, args.entropy_percentile / 100.0).item()
+        n_prune = sum(1 for e in doc_entropies if e < entropy_threshold)
+        print(f"  Entropy threshold (p{args.entropy_percentile:.0f}): {entropy_threshold:.3f}")
+        print(f"  Routing: {n_prune} docs → DocPruner, {n_corpus - n_prune} docs → DocMerger")
+
     for i in tqdm(range(n_corpus), desc="Pruning"):
         if args.pruner == "docpruner":
             result = docpruner_prune(
@@ -801,6 +853,15 @@ def run_experiment(args):
                 k1=args.k1, k2=args.k2, merge_ratio=args.merge_ratio,
                 imgpad_mask=doc_mask_list[i] if i < len(doc_mask_list) else None,
                 weighted=(args.pruner == "docmerger"),
+            )
+        elif args.pruner == "adaptive":
+            result = adaptive_hybrid_compress(
+                doc_emb_list[i], doc_attn_list[i],
+                imgpad_mask=doc_mask_list[i] if i < len(doc_mask_list) else None,
+                entropy=doc_entropies[i],
+                entropy_threshold=entropy_threshold,
+                k_prune=args.k_prune,
+                k1=args.k1, k2=args.k2, merge_ratio=args.merge_ratio,
             )
         elif args.pruner == "random":
             result = random_prune(doc_emb_list[i], ratio=args.random_ratio, seed=args.seed)
@@ -920,7 +981,7 @@ def main():
     p.add_argument("--batch-score-d", type=int, default=16)
 
     # 剪枝
-    p.add_argument("--pruner", choices=["identity", "docpruner", "random", "docmerger", "docmerger_avg"],
+    p.add_argument("--pruner", choices=["identity", "docpruner", "random", "docmerger", "docmerger_avg", "adaptive"],
                    default="docpruner")
     p.add_argument("--k", type=float, default=-0.25,
                    help="DocPruner adaptation factor（论文推荐 -0.25）")
@@ -933,6 +994,12 @@ def main():
                    help="DocMerger lower threshold (merge vs discard)")
     p.add_argument("--merge-ratio", type=float, default=0.25,
                    help="DocMerger: reduce P_merge to this fraction")
+
+    # Adaptive hybrid 参数
+    p.add_argument("--k-prune", type=float, default=-0.25,
+                   help="Adaptive: DocPruner k for low-entropy docs")
+    p.add_argument("--entropy-percentile", type=float, default=50,
+                   help="Adaptive: entropy percentile threshold (0-100)")
 
     # 其他
     p.add_argument("--seed", type=int, default=0)

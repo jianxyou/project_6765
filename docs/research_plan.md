@@ -98,3 +98,27 @@ Instead of agglomerative clustering (which is heuristic and slow), learn a small
 | 3. Learned Sparse Projection | High | Medium | High | Third (if time permits) |
 
 Recommended approach: implement Direction 1 first as it's low-risk and directly plugs DocMerger's gap at moderate compression. If results are positive, layer Direction 2 on top for additional gains at high compression. Direction 3 is the most ambitious and should only be pursued if the simpler methods plateau.
+
+---
+
+## Evaluation: Extended Benchmarks (post-approach validation)
+
+Once the best approach is identified from Directions 1–3, evaluate on the following benchmarks:
+
+### Benchmark 1: ViDoRe-V2 (4 English datasets)
+
+- **What:** The primary benchmark already implemented in this project (ESG reports + 3 other datasets).
+- **Why:** Direct comparison against existing DocPruner and DocMerger baselines. Infrastructure and cached embeddings already in place.
+- **Expected insight:** Whether the new approach improves the compression–quality frontier established by DocMerger.
+
+### Benchmark 2: MP-DocVQA
+
+- **What:** Multi-page document VQA with retrieval-style queries across page collections.
+- **Why:** Tests multi-page reasoning, which is directly relevant to patch-level compression — the merge tier may behave differently on text-heavy vs visual-heavy pages.
+- **Expected insight:** Whether compression gains hold when documents have heterogeneous page layouts within a single retrieval target.
+
+### Benchmark 3: SlideVQA / InfographicsVQA
+
+- **What:** Slide deck QA and infographic-heavy document QA, both with high visual information density.
+- **Why:** These have very different visual density profiles than the ViDoRe-V2 datasets (e.g., ESG reports). Infographics and slides pack more information per patch, stress-testing whether attention-weighted clustering captures the right visual semantics.
+- **Expected insight:** Whether DocMerger's advantage at high compression (>75%) generalizes across document types with varying visual complexity.

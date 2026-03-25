@@ -191,3 +191,69 @@ The crossover between DocPruner and DocMerger occurs around 75% compression. Thi
 **In short:** Merging is a lossy operation that is worse than keeping the original patch, but better than throwing it away. This tradeoff only pays off when the system is forced to aggressively compress.
 
 **Practical recommendation:** Use DocPruner at moderate compression (up to ~70%), switch to DocMerger when >75% compression is required. The two methods are complementary, not competing — DocMerger extends the useful compression range rather than replacing DocPruner.
+
+---
+
+## Phase 3b: Adaptive Hybrid (Direction 1)
+
+### Entropy Distribution Analysis
+
+Attention entropy (H = -Σ p_i log p_i, where p_i = attn_i / Σ attn) over image patches:
+
+| Dataset | Mean | Std | Min | Max | p25 | p50 | p75 |
+|---------|------|-----|-----|-----|-----|-----|-----|
+| ESG | 0.640 | 0.293 | 0.177 | 2.063 | 0.437 | 0.586 | 0.768 |
+| Bio | 1.013 | 0.334 | 0.345 | 2.341 | 0.771 | 0.984 | 1.222 |
+| Econ | 0.650 | 0.406 | 0.181 | 1.845 | 0.388 | 0.522 | 0.731 |
+| ESG-H | 0.638 | 0.292 | 0.186 | 1.965 | 0.435 | 0.581 | 0.760 |
+
+Good variance within each dataset (std 0.29–0.41). Bio has notably higher entropy (more diffuse attention). This motivated the adaptive approach.
+
+### Threshold Sweep Results (avg nDCG@5 across 4 datasets)
+
+**~70% compression** (DocPruner k=0.25 vs DocMerger k1=0.5,k2=0,mr=0.5):
+
+| Percentile | ESG | Bio | Econ | ESG-H | Avg |
+|------------|-------|-------|-------|-------|-------|
+| p25 | 0.6028 | 0.5975 | 0.5984 | 0.5421 | 0.5852 |
+| p50 | 0.5857 | 0.6018 | 0.6027 | 0.5364 | 0.5817 |
+| p75 | 0.5829 | 0.5999 | 0.6195 | 0.5487 | **0.5877** |
+| DocPruner | 0.5919 | 0.5984 | 0.6173 | 0.5395 | 0.5868 |
+| DocMerger | 0.6049 | 0.5984 | 0.6006 | 0.5547 | **0.5897** |
+
+**~80% compression** (DocPruner k=0.5 vs DocMerger k1=1.0,k2=0,mr=0.25):
+
+| Percentile | ESG | Bio | Econ | ESG-H | Avg |
+|------------|-------|-------|-------|-------|-------|
+| p25 | 0.5888 | 0.5678 | 0.5772 | 0.4855 | **0.5548** |
+| p50 | 0.5828 | 0.5693 | 0.5769 | 0.5027 | 0.5579 |
+| p75 | 0.5710 | 0.5661 | 0.5707 | 0.5113 | 0.5548 |
+| DocPruner | 0.5684 | 0.5763 | 0.5765 | 0.5220 | **0.5608** |
+| DocMerger | 0.5957 | 0.5766 | 0.5520 | 0.4962 | 0.5551 |
+
+**~85% compression** (DocPruner k=1.0 vs DocMerger k1=1.0,k2=0,mr=0.1):
+
+| Percentile | ESG | Bio | Econ | ESG-H | Avg |
+|------------|-------|-------|-------|-------|-------|
+| p25 | 0.5788 | 0.5154 | 0.5133 | 0.4702 | 0.5194 |
+| p50 | 0.5724 | 0.5130 | 0.5183 | 0.4669 | 0.5177 |
+| p75 | 0.5651 | 0.5081 | 0.5194 | 0.4762 | 0.5172 |
+| DocPruner | 0.5614 | 0.5097 | 0.5179 | 0.4783 | 0.5168 |
+| DocMerger | 0.5866 | 0.5352 | 0.5207 | 0.4715 | **0.5285** |
+
+### Conclusion: Negative Result
+
+The Adaptive Hybrid does **not** consistently outperform the better of DocPruner or DocMerger at any compression level:
+
+- At ~70%: Adaptive (0.5877) falls between DocPruner (0.5868) and DocMerger (0.5897).
+- At ~80%: Adaptive (0.5548) is worse than both DocPruner (0.5608) and DocMerger (0.5551).
+- At ~85%: Adaptive (0.5194) is worse than DocMerger (0.5285) and only marginally better than DocPruner (0.5168).
+
+**Why it doesn't work**: Attention entropy measures how spread out the attention is, but this doesn't reliably predict which compression method will produce better retrieval scores for a given document. The per-document routing decision needs a signal that correlates with retrieval quality under each method — entropy alone is too coarse.
+
+**Possible improvements** (not pursued):
+1. Use a query-aware signal instead of query-agnostic entropy.
+2. Learn the routing function via a small validation set.
+3. Use multiple attention statistics (entropy + kurtosis + max/mean ratio) as routing features.
+
+This is an honest negative result that narrows the search space for future work.
