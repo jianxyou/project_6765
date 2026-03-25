@@ -358,6 +358,117 @@ def random_prune(embeddings: torch.Tensor, ratio: float = 0.5,
                        num_before=n, num_after=num_keep)
 
 
+def docmerger_compress(embeddings: torch.Tensor,
+                       attention_scores: torch.Tensor,
+                       k1: float = 0.5,
+                       k2: float = 0.25,
+                       merge_ratio: float = 0.25,
+                       imgpad_mask: Optional[torch.Tensor] = None,
+                       weighted: bool = True) -> PruneResult:
+    """
+    DocMerger: tri-level partitioning + attention-weighted merging.
+
+    P_preserve = { d_j | I(d_j) > μ + k1·σ }           → keep as-is
+    P_merge    = { d_j | μ - k2·σ < I(d_j) ≤ μ + k1·σ } → cluster + merge
+    P_discard  = { d_j | I(d_j) ≤ μ - k2·σ }            → remove
+
+    Args:
+        k1: upper threshold factor (preserve vs merge boundary)
+        k2: lower threshold factor (merge vs discard boundary)
+        merge_ratio: reduce P_merge to this fraction of its size via clustering
+        weighted: if True, use attention-weighted centroids; else simple average
+    """
+    from sklearn.cluster import AgglomerativeClustering
+
+    n = embeddings.shape[0]
+    if n == 0:
+        return PruneResult(vectors=embeddings, pruning_ratio=0.0,
+                           num_before=0, num_after=0)
+
+    if imgpad_mask is None:
+        imgpad_mask = torch.ones(n, dtype=torch.bool)
+
+    text_indices = (~imgpad_mask).nonzero(as_tuple=True)[0]
+    img_indices = imgpad_mask.nonzero(as_tuple=True)[0]
+    n_img = img_indices.shape[0]
+
+    if n_img == 0:
+        return PruneResult(vectors=embeddings, pruning_ratio=0.0,
+                           num_before=n, num_after=n)
+
+    img_attn = attention_scores[img_indices]
+
+    # IQR clipping (same as docpruner) for robust μ/σ
+    q75 = img_attn.quantile(0.75).item()
+    q25 = img_attn.quantile(0.25).item()
+    iqr = q75 - q25
+    img_attn_clipped = img_attn.clamp(max=q75 + 3.0 * iqr)
+
+    mu = img_attn_clipped.mean().item()
+    sigma = img_attn_clipped.std().item() if n_img > 1 else 0.0
+
+    tau_high = mu + k1 * sigma
+    tau_low = mu - k2 * sigma
+
+    # Tri-level partition
+    preserve_mask = img_attn > tau_high
+    discard_mask = img_attn <= tau_low
+    merge_mask = ~preserve_mask & ~discard_mask
+
+    preserve_idx = img_indices[preserve_mask]
+    merge_idx = img_indices[merge_mask]
+
+    # Ensure at least one patch survives
+    if preserve_idx.shape[0] == 0 and merge_idx.shape[0] == 0:
+        preserve_idx = img_indices[img_attn.argmax().unsqueeze(0)]
+        merge_idx = torch.tensor([], dtype=torch.long)
+
+    # Merge P_merge via agglomerative clustering
+    merged_vectors = torch.empty(0, embeddings.shape[1])
+    n_merge = merge_idx.shape[0]
+    if n_merge > 0:
+        n_clusters = max(1, int(n_merge * merge_ratio))
+        if n_clusters >= n_merge:
+            # No reduction needed, keep all
+            merged_vectors = embeddings[merge_idx]
+        else:
+            merge_emb = embeddings[merge_idx].float().numpy()
+            clustering = AgglomerativeClustering(
+                n_clusters=n_clusters, metric="cosine", linkage="average"
+            )
+            labels = clustering.fit_predict(merge_emb)
+            merge_attn = img_attn[merge_mask]
+
+            centroids = []
+            for c in range(n_clusters):
+                cmask = torch.tensor(labels == c)
+                c_emb = embeddings[merge_idx[cmask]]
+                if weighted:
+                    w = merge_attn[cmask].unsqueeze(1)
+                    w = w / w.sum()
+                    centroid = (c_emb * w).sum(dim=0)
+                else:
+                    centroid = c_emb.mean(dim=0)
+                centroids.append(centroid)
+            merged_vectors = torch.stack(centroids)
+
+    # Combine: text tokens + preserved patches + merged centroids
+    parts = [embeddings[text_indices], embeddings[preserve_idx]]
+    if merged_vectors.shape[0] > 0:
+        parts.append(merged_vectors)
+    result = torch.cat(parts, dim=0)
+
+    n_img_after = preserve_idx.shape[0] + merged_vectors.shape[0]
+    pruning_ratio = 1.0 - (n_img_after / n_img) if n_img > 0 else 0.0
+
+    return PruneResult(
+        vectors=result,
+        pruning_ratio=pruning_ratio,
+        num_before=n_img,
+        num_after=int(n_img_after),
+    )
+
+
 # =============================================================================
 # MaxSim 检索（Late Interaction）
 # =============================================================================
@@ -569,7 +680,7 @@ def run_experiment(args):
 
     set_seed(args.seed)
     device = pick_device(args.device)
-    need_attention = (args.pruner == "docpruner")
+    need_attention = (args.pruner in ("docpruner", "docmerger", "docmerger_avg"))
 
     dataset_short = args.dataset.split("/")[-1]
 
@@ -683,6 +794,13 @@ def run_experiment(args):
             result = docpruner_prune(
                 doc_emb_list[i], doc_attn_list[i], k=args.k,
                 imgpad_mask=doc_mask_list[i] if i < len(doc_mask_list) else None,
+            )
+        elif args.pruner in ("docmerger", "docmerger_avg"):
+            result = docmerger_compress(
+                doc_emb_list[i], doc_attn_list[i],
+                k1=args.k1, k2=args.k2, merge_ratio=args.merge_ratio,
+                imgpad_mask=doc_mask_list[i] if i < len(doc_mask_list) else None,
+                weighted=(args.pruner == "docmerger"),
             )
         elif args.pruner == "random":
             result = random_prune(doc_emb_list[i], ratio=args.random_ratio, seed=args.seed)
@@ -802,11 +920,19 @@ def main():
     p.add_argument("--batch-score-d", type=int, default=16)
 
     # 剪枝
-    p.add_argument("--pruner", choices=["identity", "docpruner", "random"],
+    p.add_argument("--pruner", choices=["identity", "docpruner", "random", "docmerger", "docmerger_avg"],
                    default="docpruner")
     p.add_argument("--k", type=float, default=-0.25,
                    help="DocPruner adaptation factor（论文推荐 -0.25）")
     p.add_argument("--random-ratio", type=float, default=0.5)
+
+    # DocMerger 参数
+    p.add_argument("--k1", type=float, default=0.5,
+                   help="DocMerger upper threshold (preserve vs merge)")
+    p.add_argument("--k2", type=float, default=0.25,
+                   help="DocMerger lower threshold (merge vs discard)")
+    p.add_argument("--merge-ratio", type=float, default=0.25,
+                   help="DocMerger: reduce P_merge to this fraction")
 
     # 其他
     p.add_argument("--seed", type=int, default=0)

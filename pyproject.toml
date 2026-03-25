@@ -1,0 +1,16 @@
+[project]
+name = "project-6765"
+version = "0.1.0"
+description = "DocMerger: Adaptive Hierarchical Patch Merging for Multi-Vector Visual Document Retrieval"
+requires-python = ">=3.10"
+dependencies = [
+    "colpali-engine>=0.3.1",
+    "datasets",
+    "torch",
+    "pillow",
+    "tqdm",
+    "pytrec-eval-terrier",
+    "scikit-learn>=1.7.2",
+    "matplotlib>=3.10.8",
+    "plotly>=6.6.0",
+]
