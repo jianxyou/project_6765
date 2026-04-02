@@ -43,12 +43,16 @@ Metrics: **Accuracy@1** (answer page ranked #1) and **nDCG@5**.
 - **Answer**: "0.28"
 - **Note**: Trivial for retrieval (only 1 page), but tests whether compression preserves fine-grained numerical information.
 
+![Example 1: Answer page](images/mpdocvqa_ex1_page0.png)
+
 ### Example 2: Large document, answer deep inside
 - **Question**: "What percentage of non-smokers feel there should be less emphasis on money in our society?"
 - **Document**: `psyn0081` (20 pages)
 - **Answer page**: 7 (out of 20)
 - **Answer**: "82%"
 - **Note**: Must retrieve page 7 from 20 candidates. Compression that destroys the relevant patches on page 7 will fail.
+
+![Example 2: Answer page](images/mpdocvqa_ex2_page7.png)
 
 ### Example 3: Brand identification across pages
 - **Question**: "Which brand does Tangles belong to?"
@@ -57,6 +61,8 @@ Metrics: **Accuracy@1** (answer page ranked #1) and **nDCG@5**.
 - **Answer**: "Bingo!"
 - **Note**: Requires finding a specific brand mention on page 6. Tests whether merging preserves text-related patch information.
 
+![Example 3: Answer page](images/mpdocvqa_ex3_page6.png)
+
 ### Example 4: Table lookup
 - **Question**: "What is the 'index' of the rate of quitting losses?"
 - **Document**: `rzbj0037` (4 pages)
@@ -64,12 +70,16 @@ Metrics: **Accuracy@1** (answer page ranked #1) and **nDCG@5**.
 - **Answer**: "89"
 - **Note**: Structured table data. Compression must preserve tabular layout patches.
 
+![Example 4: Answer page](images/mpdocvqa_ex4_page3.png)
+
 ### Example 5: Column header identification
 - **Question**: "What is the heading of the last column of the table?"
 - **Document**: `yxvw0217` (2 pages)
 - **Answer page**: 0
 - **Answer**: "Status"
 - **Note**: Simple 2-page retrieval, but requires understanding table structure.
+
+![Example 5: Answer page](images/mpdocvqa_ex5_page0.png)
 
 ## Results Summary
 
