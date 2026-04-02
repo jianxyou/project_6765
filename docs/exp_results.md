@@ -380,3 +380,33 @@ What would help more than adding layers:
 3. **Contrastive document loss** — push W to preserve inter-document similarity structure without requiring any queries at all.
 
 The 0.07–0.13 nDCG@5 gap between same-dataset and transfer is too large to close with architecture changes alone. The training protocol is the fundamental bottleneck.
+
+---
+
+## MP-DocVQA Benchmark (Additional Evaluation)
+
+Task: per-question page retrieval within multi-page documents. 500 questions from val split, 3,002 total pages. Metrics: Accuracy@1 and nDCG@5.
+
+### Results
+
+| Method | Config | Acc@1 | nDCG@5 |
+|--------|--------|-------|--------|
+| Identity (baseline) | — | 0.840 | 0.902 |
+| DocPruner | k=-0.50 | 0.836 | 0.899 |
+| DocPruner | k=-0.25 | 0.816 | 0.887 |
+| DocPruner | k=0.00 | 0.820 | 0.888 |
+| DocPruner | k=0.25 | 0.812 | 0.882 |
+| DocPruner | k=0.50 | 0.780 | 0.861 |
+| DocPruner | k=1.00 | 0.772 | 0.848 |
+| DocMerger | k1=0.5,k2=0,mr=0.5 | 0.808 | 0.880 |
+| DocMerger | k1=1.0,k2=0,mr=0.25 | 0.774 | 0.857 |
+| DocMerger | k1=1.0,k2=0,mr=0.1 | 0.784 | 0.856 |
+| DocMerger | k1=1.0,k2=0.5,mr=0.1 | 0.792 | 0.863 |
+
+### Observations
+
+The pattern from ViDoRe-V2 holds on MP-DocVQA:
+1. At moderate compression, DocPruner performs well (k=-0.5: 0.899 nDCG@5, only -0.003 from baseline).
+2. At high compression (k=1.0), DocPruner drops to 0.848.
+3. DocMerger at comparable high compression (k1=1.0,k2=0.5,mr=0.1) achieves 0.863 — better than DocPruner's 0.848.
+4. The DocMerger advantage at high compression (+0.015 nDCG@5) is consistent across both benchmarks.
