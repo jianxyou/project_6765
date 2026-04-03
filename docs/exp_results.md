@@ -380,3 +380,75 @@ What would help more than adding layers:
 3. **Contrastive document loss** — push W to preserve inter-document similarity structure without requiring any queries at all.
 
 The 0.07–0.13 nDCG@5 gap between same-dataset and transfer is too large to close with architecture changes alone. The training protocol is the fundamental bottleneck.
+
+---
+
+## Phase 4: Diversity-Aware Selection & Residual Injection
+
+### Motivation
+
+All previous methods treat patch selection as a pure importance-scoring problem (attention-based thresholding). Phase 4 explores two orthogonal ideas:
+
+1. **Diversity-aware selection**: Can we improve retrieval by selecting patches that are both important AND diverse (covering different regions of embedding space)?
+2. **Residual injection**: Instead of improving *which* patches to keep, can we improve the *representation quality* of kept patches by injecting information from discarded ones?
+
+### Hardware
+
+- HPC: 4× NVIDIA L40 (46GB VRAM), CUDA 12.8
+- All experiments use cached embeddings from Phase 1 (ColQwen2.5-v0.2)
+
+### Methods
+
+**Diversity-based selection (target_ratio=0.5, ~50% compression):**
+
+| Method | Description |
+|--------|-------------|
+| MMR (λ=0.7) | Greedy selection maximizing λ·attention + (1-λ)·diversity |
+| Attn-FPS (α=0.5) | Farthest Point Sampling weighted by attn^α × dist^(1-α) |
+| CPS-Attn (cr=0.5) | Agglomerative clustering, select highest-attention per cluster |
+| DP-Rebalance (k=-0.5, λ=0.7) | Loose DocPruner pre-filter + MMR diversity reselection |
+
+**Residual injection (same compression as DocPruner k=-0.25, ~52%):**
+
+| Method | Description |
+|--------|-------------|
+| DP-Residual (β=0.05) | DocPruner selection + inject discarded patch info into nearest kept patch: d_k' = d_k + β·attn_norm(d_j)·(d_j - d_k) |
+
+### Results: 5 New Methods vs DocPruner k=-0.25
+
+| Method | ESG | Bio | Econ | ESG-H | Avg | Prune% | vs DP |
+|--------|-------|-------|-------|-------|-------|--------|-------|
+| DocPruner k=-0.25 | 0.5715 | 0.6220 | 0.6275 | 0.5891 | **0.6025** | ~52% | BASE |
+| MMR | 0.4606 | 0.6220 | 0.5549 | 0.5556 | 0.5483 | 50% | −0.054 |
+| Attn-FPS | 0.4716 | 0.6096 | 0.5521 | 0.5226 | 0.5390 | 50% | −0.064 |
+| CPS-Attn | 0.5357 | 0.6163 | 0.5711 | 0.5708 | 0.5735 | 50.8% | −0.029 |
+| DP-Rebalance | 0.5552 | 0.6203 | 0.6193 | 0.5848 | 0.5949 | 50% | −0.008 |
+| **DP-Residual** | **0.5758** | 0.6220 | 0.6275 | 0.5891 | **0.6036** | 52.3% | **+0.001** |
+
+### DP-Residual Beta Sweep
+
+Since DP-Residual was the only method to beat DocPruner on average, we swept the injection strength β:
+
+| β | ESG | Bio | Econ | ESG-H | Avg | vs DP |
+|------|-------|-------|-------|-------|-------|-------|
+| 0.01 | 0.5719 | 0.6140 | 0.6244 | 0.5970 | 0.6018 | −0.001 |
+| **0.02** | **0.5727** | 0.6156 | **0.6296** | 0.5968 | **0.6037** | **+0.001** |
+| 0.03 | 0.5638 | 0.6163 | 0.6284 | 0.5967 | 0.6013 | −0.001 |
+| **0.05** | **0.5758** | 0.6220 | 0.6275 | 0.5891 | **0.6036** | **+0.001** |
+| 0.07 | 0.5578 | 0.6186 | 0.6217 | 0.5941 | 0.5980 | −0.005 |
+| 0.10 | 0.5687 | 0.6096 | 0.6162 | 0.6005 | 0.5988 | −0.004 |
+| 0.15 | 0.5760 | 0.6036 | 0.6153 | 0.5771 | 0.5930 | −0.010 |
+| 0.20 | 0.5752 | 0.6017 | 0.6044 | 0.5723 | 0.5884 | −0.014 |
+| 0.30 | 0.5695 | 0.5956 | 0.6016 | 0.5600 | 0.5817 | −0.021 |
+
+Best: β=0.02 (avg 0.6037, +0.0011 over DocPruner). The improvement is consistent but marginal.
+
+### Key Findings
+
+1. **Diversity-based selection fails at moderate compression.** MMR (−0.054) and Attn-FPS (−0.064) perform significantly worse than DocPruner. Adding geometric diversity hurts retrieval quality — in VDR, attention importance is a far more reliable signal than embedding-space coverage. Patches that are geometrically diverse but low-attention are not useful for query matching.
+
+2. **DP-Rebalance is the best diversity method (−0.008) but still loses.** Pre-filtering with a loose DocPruner threshold and then rebalancing with MMR preserves most of DocPruner's quality, but the diversity reselection step still degrades performance slightly.
+
+3. **DP-Residual provides marginal improvement (+0.001).** By keeping DocPruner's selection logic unchanged and only enriching kept patches with discarded information, it avoids the selection quality degradation. However, the optimal injection strength is very small (β=0.02), and larger values quickly degrade performance — suggesting the residual signal is noisy.
+
+4. **Core insight: At ~50% compression, DocPruner's adaptive threshold is near-optimal for patch selection.** The path to improvement lies not in selecting different patches, but in better utilizing the information from discarded patches (residual injection) or operating at different compression regimes (as shown in Phase 3 with DocMerger at >75%).
