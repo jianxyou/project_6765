@@ -410,3 +410,24 @@ The pattern from ViDoRe-V2 holds on MP-DocVQA:
 2. At high compression (k=1.0), DocPruner drops to 0.848.
 3. DocMerger at comparable high compression (k1=1.0,k2=0.5,mr=0.1) achieves 0.863 — better than DocPruner's 0.848.
 4. The DocMerger advantage at high compression (+0.015 nDCG@5) is consistent across both benchmarks.
+
+### MP-DocVQA Global Retrieval (100 queries × 791 pages)
+
+A harder setting: instead of retrieving within a single document's pages, each query searches across all pages from all documents.
+
+| Method | Config | Acc@1 | nDCG@5 |
+|--------|--------|-------|--------|
+| Identity (baseline) | — | 0.210 | 0.397 |
+| DocPruner | k=-0.25 (~52%) | 0.200 | 0.377 |
+| DocPruner | k=0.25 (~71%) | 0.220 | 0.383 |
+| DocPruner | k=0.50 (~77%) | 0.190 | 0.351 |
+| DocPruner | k=1.00 (~86%) | 0.180 | 0.319 |
+| **DocMerger** | k1=0.5,k2=0,mr=0.5 (~70%) | **0.220** | **0.394** |
+| DocMerger | k1=1.0,k2=0,mr=0.25 (~80%) | 0.170 | 0.331 |
+| DocMerger | k1=1.0,k2=0.5,mr=0.1 (~81%) | 0.180 | 0.341 |
+
+Observations:
+1. Global retrieval is much harder (0.21 Acc@1 vs 0.84 per-question) — 791 candidates instead of 1–20.
+2. At ~70% compression, DocMerger (0.394 nDCG@5) nearly matches the uncompressed baseline (0.397) and beats DocPruner (0.383).
+3. At high compression (~80–86%), DocMerger (0.341) again outperforms DocPruner (0.319) — consistent +0.02 advantage.
+4. The DocMerger advantage holds across all three evaluation settings: ViDoRe-V2 cross-document, MP-DocVQA per-question, and MP-DocVQA global retrieval.

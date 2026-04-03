@@ -102,25 +102,23 @@ def maxsim_score(q_emb, d_emb, device):
     return sim.max(dim=-1).values.sum().item()
 
 
-def evaluate(data, pruner, device, **kwargs):
-    """Run compression + retrieval, return accuracy@1 and nDCG@5."""
-    correct_at1 = 0
-    ndcg5_sum = 0.0
-    total = 0
+def evaluate(data, pruner, device, global_retrieval=False, **kwargs):
+    """Run compression + retrieval, return accuracy@1 and nDCG@5.
+    
+    If global_retrieval=True, pool all pages into a single corpus and
+    retrieve across all documents (harder, more realistic).
+    """
+    questions = data["questions"]
 
-    for i in range(len(data["questions"])):
-        q_info = data["questions"][i]
-        q_emb = data["q_embs"][i]
-        n_pages = q_info["n_pages"]
-        answer_idx = q_info["answer_page_idx"]
-
-        # Compress each page
-        compressed_pages = []
+    # Compress all pages
+    all_compressed = []  # list of lists (per question)
+    for i in tqdm(range(len(questions)), desc="Compressing"):
+        n_pages = questions[i]["n_pages"]
+        compressed = []
         for j in range(n_pages):
             emb = data["page_embs"][i][j]
             attn = data["page_attns"][i][j]
             mask = data["page_masks"][i][j]
-
             if pruner == "identity":
                 result = identity_prune(emb)
             elif pruner == "docpruner":
@@ -130,32 +128,119 @@ def evaluate(data, pruner, device, **kwargs):
                     emb, attn, k1=kwargs["k1"], k2=kwargs["k2"],
                     merge_ratio=kwargs["merge_ratio"], imgpad_mask=mask,
                 )
-            compressed_pages.append(result.vectors)
+            compressed.append(result.vectors)
+        all_compressed.append(compressed)
 
-        # Retrieve: score each page
+    if global_retrieval:
+        # Build global corpus: flatten all pages with (question_idx, page_idx) mapping
+        global_pages = []
+        page_origin = []  # (question_idx, local_page_idx)
+        for i, pages in enumerate(all_compressed):
+            for j, page in enumerate(pages):
+                global_pages.append(page)
+                page_origin.append((i, j))
+
+        n_global = len(global_pages)
+        print(f"  Global retrieval: {n_global} pages in corpus")
+
+        correct_at1 = 0
+        ndcg5_sum = 0.0
+        total = 0
+
+        for i in tqdm(range(len(questions)), desc="Global retrieval"):
+            q_emb = data["q_embs"][i]
+            answer_qi = i
+            answer_pi = questions[i]["answer_page_idx"]
+
+            # Score all global pages
+            scores = []
+            for gi, page in enumerate(global_pages):
+                s = maxsim_score(q_emb, page, device)
+                scores.append((s, gi))
+            scores.sort(reverse=True)
+
+            # Check if the correct page is ranked first
+            target = (answer_qi, answer_pi)
+            if page_origin[scores[0][1]] == target:
+                correct_at1 += 1
+
+            dcg = 0.0
+            for rank, (_, gi) in enumerate(scores[:5]):
+                if page_origin[gi] == target:
+                    dcg = 1.0 / (rank + 1)
+                    break
+            ndcg5_sum += dcg
+            total += 1
+
+        return correct_at1 / total, ndcg5_sum / total, total
+
+    if global_retrieval:
+        # Build global corpus
+        global_pages = []
+        page_origin = []  # (question_idx, local_page_idx)
+        for i, pages in enumerate(all_compressed):
+            for j, page in enumerate(pages):
+                global_pages.append(page)
+                page_origin.append((i, j))
+
+        n_global = len(global_pages)
+        print(f"  Global retrieval: {len(questions)} queries × {n_global} pages")
+
+        # Build query/corpus ids for maxsim_retrieval
+        q_ids = [str(i) for i in range(len(questions))]
+        c_ids = [f"{qi}_{pi}" for qi, pi in page_origin]
+        q_embs = [data["q_embs"][i] for i in range(len(questions))]
+
+        run = maxsim_retrieval(q_embs, global_pages, q_ids, c_ids, device=device)
+
+        # Evaluate
+        correct_at1 = 0
+        ndcg5_sum = 0.0
+        for i in range(len(questions)):
+            target_cid = f"{i}_{questions[i]['answer_page_idx']}"
+            qid = str(i)
+            ranked = sorted(run[qid].items(), key=lambda x: -x[1])
+
+            if ranked[0][0] == target_cid:
+                correct_at1 += 1
+
+            dcg = 0.0
+            for rank, (cid, _) in enumerate(ranked[:5]):
+                if cid == target_cid:
+                    dcg = 1.0 / (rank + 1)
+                    break
+            ndcg5_sum += dcg
+
+        total = len(questions)
+        return correct_at1 / total, ndcg5_sum / total, total
+
+    # Per-question retrieval (original behavior)
+    correct_at1 = 0
+    ndcg5_sum = 0.0
+    total = 0
+
+    for i in range(len(questions)):
+        q_emb = data["q_embs"][i]
+        answer_idx = questions[i]["answer_page_idx"]
+
         scores = []
-        for j, page in enumerate(compressed_pages):
+        for j, page in enumerate(all_compressed[i]):
             s = maxsim_score(q_emb, page, device)
             scores.append((s, j))
         scores.sort(reverse=True)
 
-        # Accuracy@1
         if scores[0][1] == answer_idx:
             correct_at1 += 1
 
-        # nDCG@5
         dcg = 0.0
         for rank, (_, idx) in enumerate(scores[:5]):
             if idx == answer_idx:
-                dcg = 1.0 / (rank + 1)  # simplified: single relevant doc
+                dcg = 1.0 / (rank + 1)
                 break
-        idcg = 1.0  # ideal: relevant doc at rank 1
-        ndcg5_sum += dcg / idcg
+        ndcg5_sum += dcg
         total += 1
 
-    acc1 = correct_at1 / total
-    ndcg5 = ndcg5_sum / total
-    return acc1, ndcg5, total
+    return correct_at1 / total, ndcg5_sum / total, total
 
 
 def main():
@@ -170,6 +255,8 @@ def main():
     p.add_argument("--merge-ratio", type=float, default=0.25)
     p.add_argument("--device", default=None)
     p.add_argument("--cache-dir", default="outputs_replicate/cache_mpdocvqa")
+    p.add_argument("--global-retrieval", action="store_true",
+                   help="Retrieve across all pages globally (not per-question)")
     args = p.parse_args()
 
     set_seed(0)
@@ -193,14 +280,16 @@ def main():
         data = encode_and_cache(questions, None, None, device, cache_path)
 
     # Evaluate
-    print(f"\nEvaluating: pruner={args.pruner}")
+    mode = "global" if args.global_retrieval else "per-question"
+    print(f"\nEvaluating: pruner={args.pruner}, mode={mode}")
     acc1, ndcg5, total = evaluate(
         data, args.pruner, device,
+        global_retrieval=args.global_retrieval,
         k=args.k, k1=args.k1, k2=args.k2, merge_ratio=args.merge_ratio,
     )
 
     print(f"\n{'='*50}")
-    print(f"MP-DocVQA ({args.split}, n={total})")
+    print(f"MP-DocVQA ({args.split}, n={total}, {mode})")
     print(f"Pruner: {args.pruner}")
     print(f"Accuracy@1: {acc1:.4f} ({int(acc1*total)}/{total})")
     print(f"nDCG@5:     {ndcg5:.4f}")
