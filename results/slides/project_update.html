@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>DocMerger — Project Update</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.css">
+<style>
+.reveal h1 { font-size: 1.8em; }
+.reveal h2 { font-size: 1.3em; }
+.reveal h3 { font-size: 1.0em; }
+.reveal table { font-size: 0.55em; margin: 0 auto; }
+.reveal th, .reveal td { padding: 4px 10px; }
+.reveal .highlight { color: #E91E63; font-weight: bold; }
+.reveal .blue { color: #2196F3; }
+.reveal .green { color: #4CAF50; }
+.reveal .small { font-size: 0.6em; color: #666; }
+.reveal ul { font-size: 0.75em; }
+.reveal li { margin-bottom: 0.3em; }
+.reveal img { max-height: 420px; }
+.reveal .two-col { display: flex; gap: 30px; }
+.reveal .two-col > div { flex: 1; }
+</style>
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- Title -->
+<section>
+<h1>DocMerger</h1>
+<h3>Adaptive Hierarchical Patch Merging for<br>Multi-Vector Visual Document Retrieval</h3>
+<p class="small" style="margin-top:40px">Project Update — April 2026</p>
+</section>
+
+<!-- Problem -->
+<section>
+<h2>Problem</h2>
+<ul>
+<li>Multi-vector VDR represents each page as <strong>hundreds of patch embeddings</strong></li>
+<li>State-of-the-art retrieval quality, but <strong>prohibitive storage</strong></li>
+<li>DocPruner (Yan et al., 2025): adaptive pruning via EOS attention thresholding</li>
+<li>Works well at moderate compression, but <strong>degrades sharply at &gt;75%</strong></li>
+<li><strong>Key insight</strong>: pruning permanently discards information — can we do better?</li>
+</ul>
+</section>
+
+<!-- Method -->
+<section>
+<h2>DocMerger: Tri-Level Partitioning</h2>
+<div style="font-size:0.7em; text-align:left; background:#f5f5f5; padding:20px; border-radius:8px; margin:20px 0;">
+<p>Given importance scores I(d<sub>j</sub>) with mean μ and std σ:</p>
+<p><strong>P<sub>preserve</sub></strong> = { d<sub>j</sub> | I(d<sub>j</sub>) &gt; μ + k₁·σ } → <span class="green">keep as-is</span></p>
+<p><strong>P<sub>merge</sub></strong> = { d<sub>j</sub> | μ − k₂·σ &lt; I(d<sub>j</sub>) ≤ μ + k₁·σ } → <span class="blue">cluster + weighted merge</span></p>
+<p><strong>P<sub>discard</sub></strong> = { d<sub>j</sub> | I(d<sub>j</sub>) ≤ μ − k₂·σ } → <span class="highlight">remove</span></p>
+</div>
+<ul>
+<li>Merging uses agglomerative clustering (cosine distance)</li>
+<li>Centroids weighted by EOS attention importance</li>
+<li>Merging is worse than keeping original, but <strong>better than discarding</strong></li>
+</ul>
+</section>
+
+<!-- Experiment Setup -->
+<section>
+<h2>Experiment Setup</h2>
+<table>
+<tr><th>Property</th><th>Value</th></tr>
+<tr><td>Model</td><td>ColQwen2.5 (vidore/colqwen2.5-v0.2, ~3B params)</td></tr>
+<tr><td>Benchmarks</td><td>ViDoRe-V2 (4 datasets) + MP-DocVQA</td></tr>
+<tr><td>Metric</td><td>nDCG@5, Accuracy@1</td></tr>
+<tr><td>Hardware</td><td>MacBook Pro 36GB (MPS)</td></tr>
+<tr><td>Baselines</td><td>DocPruner (6 k values), Random, Identity</td></tr>
+</table>
+</section>
+
+<!-- ViDoRe-V2 Datasets -->
+<section>
+<h2>Benchmark 1: ViDoRe-V2</h2>
+<p style="font-size:0.7em;">Cross-document retrieval — find the relevant document page from a corpus</p>
+<table>
+<tr><th>Dataset</th><th>Corpus</th><th>Queries</th><th>Domain</th></tr>
+<tr><td>esg_reports_v2</td><td>1,538 pages</td><td>57</td><td>ESG / sustainability reports</td></tr>
+<tr><td>biomedical_lectures_eng_v2</td><td>1,016 pages</td><td>160</td><td>Biomedical lecture slides</td></tr>
+<tr><td>economics_reports_v2</td><td>452 pages</td><td>58</td><td>Economics / financial reports</td></tr>
+<tr><td>esg_reports_human_labeled_v2</td><td>1,538 pages</td><td>52</td><td>ESG (human-annotated)</td></tr>
+</table>
+<p class="small">Format: BEIR (corpus + queries + qrels) · Metric: nDCG@5 · Model: ColQwen2.5</p>
+</section>
+
+<!-- MP-DocVQA Dataset -->
+<section>
+<h2>Benchmark 2: MP-DocVQA</h2>
+<p style="font-size:0.7em;">Page retrieval within multi-page documents — find the answer page</p>
+<div class="two-col">
+<div>
+<h3>Per-Question</h3>
+<ul>
+<li>500 questions evaluated</li>
+<li>3,002 total pages</li>
+<li>1–20 pages per question</li>
+<li>Retrieve within one document</li>
+</ul>
+</div>
+<div>
+<h3>Global</h3>
+<ul>
+<li>100 questions evaluated</li>
+<li>791 pages in corpus</li>
+<li>Retrieve across all documents</li>
+<li>Much harder (21% vs 84% Acc@1)</li>
+</ul>
+</div>
+</div>
+<p class="small">Source: lmms-lab/MP-DocVQA · Diverse: forms, tables, reports, handwritten</p>
+</section>
+
+<!-- MP-DocVQA Examples -->
+<section>
+<h2>MP-DocVQA: Example Questions</h2>
+<div class="two-col">
+<div style="font-size:0.6em;">
+<p><strong>Q:</strong> "What percentage of non-smokers feel there should be less emphasis on money?"</p>
+<p>Doc: 20 pages · Answer page: 7 · Answer: "82%"</p>
+<img src="../../docs/images/mpdocvqa_ex2_page7.png" style="max-height:280px;">
+</div>
+<div style="font-size:0.6em;">
+<p><strong>Q:</strong> "Which brand does Tangles belong to?"</p>
+<p>Doc: 8 pages · Answer page: 6 · Answer: "Bingo!"</p>
+<img src="../../docs/images/mpdocvqa_ex3_page6.png" style="max-height:280px;">
+</div>
+</div>
+</section>
+
+<!-- MP-DocVQA Examples 2 -->
+<section>
+<h2>MP-DocVQA: More Examples</h2>
+<div class="two-col">
+<div style="font-size:0.6em;">
+<p><strong>Q:</strong> "What is the 'index' of the rate of quitting losses?"</p>
+<p>Doc: 4 pages · Answer page: 3 · Answer: "89"</p>
+<img src="../../docs/images/mpdocvqa_ex4_page3.png" style="max-height:280px;">
+</div>
+<div style="font-size:0.6em;">
+<p><strong>Q:</strong> "What is the heading of the last column of the table?"</p>
+<p>Doc: 2 pages · Answer page: 0 · Answer: "Status"</p>
+<img src="../../docs/images/mpdocvqa_ex5_page0.png" style="max-height:280px;">
+</div>
+</div>
+</section>
+
+<!-- ViDoRe-V2 Results -->
+<section>
+<h2>ViDoRe-V2 Results (avg across 4 datasets)</h2>
+<img src="../figures/docmerger_vs_docpruner.png">
+</section>
+
+<!-- Key Numbers -->
+<section>
+<h2>DocMerger vs DocPruner — Key Numbers</h2>
+<table>
+<tr><th>Setting</th><th>Compression</th><th>DocPruner</th><th>DocMerger</th><th>Δ</th><th>Δ%</th></tr>
+<tr><td>ViDoRe-V2</td><td>~70%</td><td>0.5868</td><td class="highlight">0.5897</td><td>+0.003</td><td>+0.5%</td></tr>
+<tr><td>ViDoRe-V2</td><td>~84–86%</td><td>0.5168</td><td class="highlight">0.5285</td><td>+0.012</td><td>+2.3%</td></tr>
+<tr><td>MP-DocVQA per-Q</td><td>~81–86%</td><td>0.848</td><td class="highlight">0.863</td><td>+0.015</td><td>+1.8%</td></tr>
+<tr><td>MP-DocVQA global</td><td>~70%</td><td>0.383</td><td class="highlight">0.394</td><td>+0.011</td><td>+2.9%</td></tr>
+<tr><td>MP-DocVQA global</td><td>~81–86%</td><td>0.319</td><td class="highlight">0.341</td><td>+0.022</td><td>+6.9%</td></tr>
+</table>
+<p class="small">Largest gain in hardest setting: global retrieval at high compression (+6.9%)</p>
+</section>
+
+<!-- Three Benchmarks Plot -->
+<section>
+<h2>Consistent Across Three Settings</h2>
+<img src="../figures/three_benchmarks.png">
+</section>
+
+<!-- Ablation -->
+<section>
+<h2>Ablation: Attention-Weighted vs Simple Average</h2>
+<table>
+<tr><th>Dataset</th><th>Weighted</th><th>Simple Avg</th><th>Δ</th></tr>
+<tr><td>ESG</td><td class="highlight">0.5957</td><td>0.5909</td><td>+0.005</td></tr>
+<tr><td>Bio</td><td>0.5766</td><td class="blue">0.5786</td><td>−0.002</td></tr>
+<tr><td>Econ</td><td class="highlight">0.5520</td><td>0.5482</td><td>+0.004</td></tr>
+<tr><td>ESG-H</td><td>0.4962</td><td>0.4962</td><td>0.000</td></tr>
+<tr><td><strong>Avg</strong></td><td class="highlight"><strong>0.5551</strong></td><td>0.5535</td><td><strong>+0.002</strong></td></tr>
+</table>
+<p class="small">Config: k₁=1.0, k₂=0, merge_ratio=0.25 (~80% compression)</p>
+</section>
+
+<!-- Direction 1 -->
+<section>
+<h2>Explored: Adaptive Hybrid (Direction 1)</h2>
+<ul>
+<li><strong>Idea</strong>: Route each document to DocPruner or DocMerger based on attention entropy</li>
+<li>High entropy (diffuse attention) → DocMerger</li>
+<li>Low entropy (concentrated attention) → DocPruner</li>
+</ul>
+<h3 style="color:#E91E63; margin-top:20px;">❌ Negative Result</h3>
+<ul>
+<li>Entropy doesn't reliably predict which method is better per document</li>
+<li>Adaptive (0.5877) falls between DocPruner (0.5868) and DocMerger (0.5897) at ~70%</li>
+<li><strong>Conclusion</strong>: routing signal is too coarse — needs query-aware features</li>
+</ul>
+</section>
+
+<!-- Direction 3 -->
+<section>
+<h2>Explored: Learned Sparse Projection (Direction 3)</h2>
+<ul>
+<li><strong>Idea</strong>: Replace clustering with a learned linear layer, trained via MaxSim distillation</li>
+<li>Same-dataset: <span class="highlight">0.6180 nDCG@5 at 80% compression</span> (baseline: 0.6205)</li>
+</ul>
+<h3 style="color:#E91E63; margin-top:20px;">⚠️ Does Not Generalize</h3>
+<table>
+<tr><th>Evaluation</th><th>~80%</th><th>~84%</th></tr>
+<tr><td>Same-dataset (overfitting)</td><td class="highlight">0.6180</td><td class="highlight">0.6173</td></tr>
+<tr><td>Cross-dataset (best transfer)</td><td>0.5469</td><td>0.5327</td></tr>
+<tr><td>DocPruner baseline</td><td>0.5608</td><td>0.5168</td></tr>
+</table>
+<p class="small">Bottleneck is training signal (query-specific), not model capacity</p>
+</section>
+
+<!-- MP-DocVQA -->
+<section>
+<h2>New Benchmark: MP-DocVQA</h2>
+<div class="two-col">
+<div>
+<h3>Per-Question Retrieval</h3>
+<ul>
+<li>500 queries, 1–20 pages each</li>
+<li>Find answer page within document</li>
+<li>Baseline: 84% Acc@1</li>
+</ul>
+</div>
+<div>
+<h3>Global Retrieval</h3>
+<ul>
+<li>100 queries × 791 pages</li>
+<li>Find answer page across all docs</li>
+<li>Baseline: 21% Acc@1</li>
+</ul>
+</div>
+</div>
+<p style="font-size:0.7em; margin-top:20px;">Diverse document types: forms, tables, reports, handwritten docs</p>
+</section>
+
+<!-- Research Progress -->
+<section>
+<h2>Research Progress</h2>
+<table>
+<tr><th>Phase</th><th>Status</th></tr>
+<tr><td>Phase 1 — Setup & embedding extraction</td><td>✅ Complete</td></tr>
+<tr><td>Phase 2 — DocPruner baselines (6k × 4 datasets)</td><td>✅ Complete</td></tr>
+<tr><td>Phase 3 — DocMerger + sweep + ablation</td><td>✅ Complete</td></tr>
+<tr><td>Direction 1 — Adaptive Hybrid</td><td>✅ Negative result</td></tr>
+<tr><td>Direction 3 — Learned Projection</td><td>✅ Overfits (ceiling found)</td></tr>
+<tr><td>MP-DocVQA benchmark (per-Q + global)</td><td>✅ Complete</td></tr>
+<tr><td>Phase 4 — Poster & poster session</td><td>🔄 In progress</td></tr>
+</table>
+</section>
+
+<!-- Key Takeaways -->
+<section>
+<h2>Key Takeaways</h2>
+<ol style="font-size:0.75em;">
+<li><strong>DocMerger outperforms DocPruner at &gt;75% compression</strong> — consistent across 3 evaluation settings and 5 datasets</li>
+<li>Merging is worse than keeping originals, but <strong>better than discarding</strong> — the tradeoff pays off at high compression</li>
+<li>Adaptive per-document routing via entropy <strong>doesn't work</strong> — the signal is too coarse</li>
+<li>Learned projection shows <strong>high ceiling</strong> (0.62 at 80%) but <strong>doesn't transfer</strong> — needs query-agnostic training</li>
+<li>Practical recommendation: <strong>DocPruner ≤70%, DocMerger &gt;75%</strong></li>
+</ol>
+</section>
+
+<!-- Future Work -->
+<section>
+<h2>Future Work</h2>
+<ul>
+<li><strong>Direction 2 — Residual Merging</strong>: Store centroid + rank-1 PCA residual per cluster</li>
+<li><strong>Learned projection with synthetic queries</strong>: Train on LLM-generated queries for generalization</li>
+<li><strong>Poster design & poster session</strong></li>
+</ul>
+</section>
+
+<!-- End -->
+<section>
+<h1>Thank You</h1>
+<p class="small">Code: <a href="https://github.com/jianxyou/project_6765">github.com/jianxyou/project_6765</a></p>
+</section>
+
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script>Reveal.initialize({ hash: true, slideNumber: true });</script>
+</body>
+</html>
