@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from .utils import set_seed, pick_device
 from .model import load_colqwen25, encode_corpus, encode_queries
-from .data import load_vidore_v2
+from .data import load_vidore_v2, load_vidore_v1, VIDORE_V1_DATASETS
 from .eval import maxsim_retrieval, evaluate_ndcg5
 from .methods import get_method
 from .methods.adaptive import compute_entropy_threshold
@@ -59,10 +59,14 @@ def run_experiment(config: dict) -> dict:
     print(f"Experiment: {cfg['pruner']} on {dataset_short}")
     print(f"{'='*70}")
 
-    # 1. Load dataset
+    # 1. Load dataset (auto-detect V1 vs V2/V3 format)
     print(f"\n[1/5] Loading dataset ({dataset_short})...")
-    corpus_ids, corpus_images, query_ids, query_texts, qrels = \
-        load_vidore_v2(cfg["dataset"], split=cfg["split"], language=cfg["language"])
+    if cfg["dataset"] in VIDORE_V1_DATASETS:
+        corpus_ids, corpus_images, query_ids, query_texts, qrels = \
+            load_vidore_v1(cfg["dataset"], split=cfg["split"])
+    else:
+        corpus_ids, corpus_images, query_ids, query_texts, qrels = \
+            load_vidore_v2(cfg["dataset"], split=cfg["split"], language=cfg["language"])
 
     n_corpus = len(corpus_ids)
     n_queries = len(query_ids)

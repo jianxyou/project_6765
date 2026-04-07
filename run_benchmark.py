@@ -23,7 +23,7 @@ import argparse
 import json
 import sys
 
-from benchmark.data import VIDORE_V1_DATASETS, VIDORE_V2_DATASETS, DOCPRUNER_K_VALUES
+from benchmark.data import VIDORE_V1_DATASETS, VIDORE_V2_DATASETS, VIDORE_V3_DATASETS, DOCPRUNER_K_VALUES
 from benchmark.experiment import run_experiment, run_sweep
 from benchmark.methods import list_methods
 
@@ -43,7 +43,10 @@ def _make_sweep_configs(preset: str, base_cfg: dict) -> list:
     # Pick dataset list based on preset suffix
     if preset.endswith("_v1"):
         datasets = VIDORE_V1_DATASETS
-        preset_base = preset[:-3]  # strip _v1
+        preset_base = preset[:-3]
+    elif preset.endswith("_v3"):
+        datasets = VIDORE_V3_DATASETS
+        preset_base = preset[:-3]
     elif preset.endswith("_v2"):
         datasets = VIDORE_V2_DATASETS
         preset_base = preset[:-3]
@@ -84,7 +87,7 @@ def _make_sweep_configs(preset: str, base_cfg: dict) -> list:
     if not configs:
         print(f"Unknown preset: {preset}")
         print(f"Available: docpruner, docmerger, cps, ptm, all")
-        print(f"Append _v1 or _v2 to select benchmark (e.g. docpruner_v1)")
+        print(f"Append _v1, _v2, or _v3 to select benchmark (e.g. docpruner_v3)")
         sys.exit(1)
 
     return configs

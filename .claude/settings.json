@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python run_benchmark.py run --pruner docpruner --k -0.25 --dataset vidore/esg_reports_v2 --outdir outputs)",
+      "Bash(ls outputs/metrics_*.json)",
+      "Bash(cat outputs/metrics_*.json)",
+      "Bash(mkdir -p /active_work/environment/benchmark_outputs)",
+      "Bash(python run_benchmark.py run --pruner docpruner --k -0.25 --dataset vidore/esg_reports_v2 --outdir /active_work/environment/benchmark_outputs)",
+      "Read(//active_work/environment/benchmark_outputs/**)",
+      "Bash(ls /active_work/environment/benchmark_outputs/metrics_*.json)",
+      "Bash(cat /active_work/environment/benchmark_outputs/metrics_*.json)",
+      "WebSearch",
+      "Bash(sinfo --summarize)",
+      "Bash(nvidia-smi -L)",
+      "Bash(ls /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/benchmark/methods/dp_dedup*)",
+      "Read(//tmp/claude-1003/-home-eoijuya-thinclient_drives-C--Users-eoijuya-work-project-6765/c175d88f-cee1-41b7-a885-51d1d55a71e3/tasks/**)",
+      "Bash(ls /active_work/environment/benchmark_outputs/metrics_*dp_postmerge*)",
+      "Bash(python3 -c 'import json; m=json.load\\(open\\('\\\\''__TRACKED_VAR__'\\\\''\\)\\); print\\(f'\\\\''{m[\"dataset_short\"]}: ndcg={m[\"ndcg@5\"]}, prune={m[\"avg_pruning_ratio\"]*100:.1f}%, thresh={m.get\\(\"merge_threshold\",\"?\"\\)}'\\\\''\\)')",
+      "Bash(export HF_HOME=/active_work/environment/.cache/huggingface)",
+      "Bash(mkdir -p /active_work/environment/.cache/huggingface)",
+      "Bash(pkill -f \"run_benchmark\\\\|from benchmark\")",
+      "Bash(kill 2835783 2836147)",
+      "Bash(cp /active_work/environment/benchmark_outputs/figures/dp_postmerge_arrows.png /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/results/figures/)",
+      "Bash(cp /active_work/environment/benchmark_outputs/figures/dp_postmerge_arrows.pdf /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/results/figures/)",
+      "Bash(rsync -av ~/thinclient_drives/C:/Users/eoijuya/work/project_6765/ /active_work/environment/project_6765/ --exclude .venv --exclude __pycache__ --exclude .git --exclude .claude)",
+      "Read(//home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/**)",
+      "Bash(python3 -c ':*)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/acl-org/acl-style-files/master/latex/acl.sty\" -o acl.sty)",
+      "Bash(curl -sL \"https://raw.githubusercontent.com/acl-org/acl-style-files/master/latex/acl_natbib.bst\" -o acl_natbib.bst)",
+      "Bash(ls *.sty *.bst)",
+      "Bash(pdflatex -interaction=nonstopmode main.tex)",
+      "Bash(ls /active_work/environment/benchmark_outputs/metrics_*postmerge*)",
+      "Bash(cp /active_work/environment/project_6765/results/figures/dp_postmerge_arrows_t*.png /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/results/figures/)",
+      "Bash(cp /active_work/environment/project_6765/results/figures/dp_postmerge_arrows_t*.pdf /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/results/figures/)",
+      "Read(//home/eoijuya/thinclient_drives/C:/Users/eoijuya/**)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git -C /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/ status -s)",
+      "Bash(git push:*)"
+    ],
+    "additionalDirectories": [
+      "/home/eoijuya/thinclient_drives/C:/Users/eoijuya/Desktop",
+      "/home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/results/figures",
+      "/home/eoijuya/thinclient_drives/C:/Users/eoijuya/Downloads",
+      "/home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/.git"
+    ]
+  }
+}
