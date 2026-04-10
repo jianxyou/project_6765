@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from benchmark.methods import list_methods, METHODS; print\\(''Methods:'', list_methods\\(\\)\\); print\\(''All imports OK''\\)\")",
+      "Bash(source /active_work/environment/.venv/bin/activate)",
+      "Bash(python -c \":*)",
+      "Bash(python run_benchmark.py methods)",
+      "Bash(python run_benchmark.py --help)",
+      "Bash(python run_benchmark.py run --help)",
+      "Bash(squeue -u eoijuya)",
+      "Bash(ls -lh /active_work/environment/benchmark_outputs/all_results_gpu*.json /active_work/environment/benchmark_outputs/all_results_merged.json)",
+      "Bash(rsync -a --exclude='.git' --exclude='__pycache__' --exclude='.claude' /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/ /active_work/environment/project_6765/)",
+      "Read(//active_work/environment/**)",
+      "Bash(wc -l /active_work/environment/benchmark_outputs/logs/worker_gpu*.log)",
+      "Bash(grep -c \"Result:\" /active_work/environment/benchmark_outputs/logs/worker_gpu*.log)",
+      "Bash(grep -c \"error\\\\|Error\\\\|Transport\" /active_work/environment/benchmark_outputs/logs/worker_gpu*.log)",
+      "Bash(nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv,noheader)",
+      "Bash(grep -r \"Transport\\\\|Errno 107\\\\|error\" /active_work/environment/benchmark_outputs/logs/worker_gpu*.log)",
+      "Read(//home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/**)",
+      "Bash(top -bn1)",
+      "Bash(nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader)",
+      "Bash(scancel 670)",
+      "Bash(python3 -c ':*)",
+      "Bash(kill 2392178)",
+      "Bash(kill 2396883)",
+      "Bash(curl -L -o /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/ressource/ptm_yan2026.pdf \"https://arxiv.org/pdf/2602.19549\")",
+      "Bash(kill 2428558)",
+      "Bash(rsync -a --delete --exclude='.git' --exclude='__pycache__' --exclude='.claude' --exclude='outputs' /home/eoijuya/thinclient_drives/C:/Users/eoijuya/work/project_6765/ /active_work/environment/project_6765/)",
+      "Bash(ps -p 2433135 -o pid,etime,cmd --no-headers)",
+      "Bash(xargs -I{} echo \"{}/48 done\")"
+    ],
+    "additionalDirectories": [
+      "/active_work/environment/project_6765",
+      "/home/eoijuya/.claude/projects/-home-eoijuya-thinclient-drives-C--Users-eoijuya-work-project_6765/memory"
+    ]
+  }
+}

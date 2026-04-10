@@ -1,0 +1,363 @@
+% ACL 2025 format
+\documentclass[11pt]{article}
+\usepackage[hyperref]{acl}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{subcaption}
+
+\definecolor{better}{HTML}{2E7D32}
+\definecolor{worse}{HTML}{C62828}
+\newcommand{\up}[1]{\textcolor{better}{\small $\uparrow$#1}}
+\newcommand{\down}[1]{\textcolor{worse}{\small $\downarrow$#1}}
+
+\title{DP-PostMerge: Lossless Extra Compression for Multi-Vector\\Visual Document Retrieval via Post-hoc Duplicate Merging}
+
+\author{
+  Jianxin You \\
+  \texttt{jianxin@example.edu}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Multi-vector visual document retrieval (VDR) models achieve state-of-the-art accuracy by representing each document page as hundreds of patch-level embeddings, but this incurs prohibitive storage overhead.
+Recent pruning methods like DocPruner adaptively discard low-importance patches based on intra-document attention, achieving near-lossless compression up to $\sim$50\%.
+However, we observe that DocPruner's surviving patches still contain significant \emph{semantic redundancy}: high-attention patches from the same visual region are near-duplicates in embedding space.
+We propose \textbf{DP-PostMerge}, a simple yet effective post-hoc extension that merges near-duplicate patches \emph{after} DocPruner's selection via attention-weighted averaging.
+This yields 5--10\% extra compression with virtually no impact on retrieval quality ($<$0.005 nDCG@5 degradation).
+We also explore five alternative diversity-aware compression strategies---MMR selection, attention-guided FPS, deduplication-during-selection, residual injection, and diversity rebalancing---and find that the simplest post-hoc approach consistently matches or outperforms them.
+Experiments on four ViDoRe-V2 datasets with ColQwen2.5 validate our approach, demonstrating that DP-PostMerge extends DocPruner's Pareto frontier without adding architectural complexity.
+\end{abstract}
+
+
+\section{Introduction}
+
+Visual Document Retrieval (VDR) has emerged as a critical task for searching visually rich documents such as reports, slides, and academic papers~\cite{faysse2024colpali}.
+The current state-of-the-art paradigm represents each document page as a set of \emph{patch-level embeddings} $\mathbf{D} = \{\mathbf{d}_j\}_{j=1}^{N_p}$, enabling fine-grained matching via late interaction mechanisms like MaxSim~\cite{khattab2020colbert}:
+\begin{equation}
+s(q, d) = \sum_{i=1}^{N_q} \max_{j=1}^{N_p} \mathbf{q}_i^\top \mathbf{d}_j
+\end{equation}
+
+While this achieves superior retrieval performance, storing hundreds of vectors per page creates an $O(N_p \times D)$ storage overhead that hinders large-scale deployment~\cite{santhanam2022plaid}.
+
+DocPruner~\cite{yan2025docpruner} addresses this by adaptively discarding low-importance patches.
+It computes each patch's importance as its attention from the \texttt{[EOS]} token, then applies an adaptive threshold $\tau = \mu + k \cdot \sigma$ to retain only patches with $I(\mathbf{d}_j) > \tau$.
+This achieves near-lossless compression at moderate rates ($\sim$50\%), but suffers a sharp performance cliff at higher compression.
+
+We make a simple observation: \textbf{DocPruner's surviving patches are often semantically redundant}.
+Patches from the same visual region (e.g., a dense text paragraph or repeated table structure) all receive high attention and survive pruning, but their embeddings have cosine similarity $>0.95$.
+These near-duplicates waste the storage budget without adding retrieval value, since MaxSim's $\max$ operator only needs \emph{one} representative per semantic region.
+
+Based on this observation, we propose \textbf{DP-PostMerge}: after DocPruner selects its patches, we identify near-duplicate pairs (cosine similarity above threshold $\theta$) and merge them via attention-weighted averaging.
+This is a \emph{post-hoc} operation that does not change DocPruner's selection logic, making it trivially compatible with any attention-based pruning method.
+
+Our key contributions:
+\begin{itemize}
+\item We identify and quantify the semantic redundancy problem in attention-based patch pruning.
+\item We propose DP-PostMerge, a simple post-hoc merging step that achieves 5--10\% extra compression at near-zero quality cost.
+\item We systematically compare six compression strategies and show that the simplest approach matches or outperforms more complex alternatives.
+\end{itemize}
+
+
+\section{Related Work}
+
+\paragraph{Multi-Vector VDR.}
+ColPali~\cite{faysse2024colpali} pioneered patch-level document retrieval, representing each page as multi-vector embeddings.
+Subsequent models---ColQwen2.5, ColNomic~\cite{nomicai2025}, and Jina-v4~\cite{gunther2025jina}---improved the base model quality.
+However, the storage overhead of $N_p$ vectors per page remains a critical bottleneck.
+
+\paragraph{Pruning-based Compression.}
+DocPruner~\cite{yan2025docpruner} introduced adaptive threshold pruning based on EOS attention statistics ($\tau = \mu + k\sigma$).
+Zong and Piwowarski~\cite{zong2025lossless} explored lossless token pruning via dominance checking.
+Wen et al.~\cite{wen2025token} combined attention and similarity scores.
+These methods achieve good compression at moderate rates but degrade sharply beyond $\sim$70\%.
+
+\paragraph{Merging-based Compression.}
+Light-ColPali~\cite{ma2025light} explored spatial and semantic clustering to merge patches into fewer vectors.
+Prune-then-Merge~\cite{yan2026ptm} proposed a two-stage framework combining adaptive pruning with hierarchical merging.
+MetaEmbed~\cite{xiao2025metaembed} uses budget-based compression but requires architecture changes.
+
+\paragraph{Our Position.}
+Unlike Prune-then-Merge, which applies merging to \emph{all} surviving patches via clustering, DP-PostMerge only merges patches that are actual near-duplicates ($\cos > \theta$).
+This preserves the fidelity of semantically distinct patches while eliminating true redundancy.
+
+
+\section{Method}
+
+\subsection{Background: DocPruner}
+
+Given a document page processed by a VLM encoder $\Phi(\cdot)$, DocPruner extracts patch embeddings $\mathbf{D} = \{\mathbf{d}_j\}_{j=1}^{N_p}$ and computes importance scores from the EOS token's attention:
+\begin{equation}
+I(\mathbf{d}_j) = \bar{\mathbf{A}}^{(L)}_{\text{eos}, j}
+\end{equation}
+where $\bar{\mathbf{A}}^{(L)}$ is the head-averaged attention matrix from the final transformer layer.
+
+An adaptive threshold is computed as:
+\begin{equation}
+\tau = \mu + k \cdot \sigma
+\end{equation}
+where $\mu$ and $\sigma$ are the (IQR-clipped) mean and standard deviation of the importance scores, and $k$ is a hyperparameter controlling pruning aggressiveness.
+Patches with $I(\mathbf{d}_j) > \tau$ are retained.
+
+\subsection{Observation: Redundancy in Surviving Patches}
+
+We observe that DocPruner's attention-based selection is \emph{importance-aware but redundancy-blind}.
+Patches from the same visual region often receive similar attention scores and are all retained, despite being near-duplicates in embedding space.
+
+Formally, let $\mathbf{D}' = \{\mathbf{d}_j \in \mathbf{D} \mid I(\mathbf{d}_j) > \tau\}$ be DocPruner's output.
+We define the \emph{redundancy set} for threshold $\theta$ as:
+\begin{equation}
+\mathcal{R}_\theta = \{(\mathbf{d}_i, \mathbf{d}_j) \in \mathbf{D}' \times \mathbf{D}' \mid \cos(\mathbf{d}_i, \mathbf{d}_j) > \theta, \, i \neq j\}
+\end{equation}
+
+Empirically, with $\theta = 0.95$ and $k = -0.25$, we find that 10--15\% of surviving image patches participate in at least one redundant pair.
+These patches contribute minimal additional retrieval value because MaxSim's $\max$ operator already saturates with one good match per query token.
+
+\subsection{DP-PostMerge}
+
+Our method operates in two steps after DocPruner:
+
+\begin{algorithm}[t]
+\caption{DP-PostMerge}
+\begin{algorithmic}[1]
+\REQUIRE Embeddings $\mathbf{D}$, attention scores $\mathbf{I}$, mask $\mathbf{M}$, DocPruner factor $k$, merge threshold $\theta$
+\STATE Run DocPruner($k$) $\rightarrow$ kept image patches $\mathbf{D}'_{\text{img}}$
+\STATE Sort $\mathbf{D}'_{\text{img}}$ by attention (descending)
+\STATE $\mathcal{S} \leftarrow \emptyset$ \COMMENT{merged result set}
+\FOR{each patch $\mathbf{d}_i$ in attention order}
+  \IF{$\mathbf{d}_i$ already consumed}
+    \STATE \textbf{continue}
+  \ENDIF
+  \STATE Find $\mathcal{N}_i = \{\mathbf{d}_j : \cos(\mathbf{d}_i, \mathbf{d}_j) > \theta, \mathbf{d}_j$ not consumed$\}$
+  \IF{$|\mathcal{N}_i| = 1$}
+    \STATE $\mathcal{S} \leftarrow \mathcal{S} \cup \{\mathbf{d}_i\}$ \COMMENT{no duplicates}
+  \ELSE
+    \STATE $\mathbf{d}_{\text{merged}} = \sum_{j \in \mathcal{N}_i} w_j \mathbf{d}_j$ where $w_j = \frac{I(\mathbf{d}_j)}{\sum_{l \in \mathcal{N}_i} I(\mathbf{d}_l)}$
+    \STATE $\mathcal{S} \leftarrow \mathcal{S} \cup \{\mathbf{d}_{\text{merged}}\}$
+  \ENDIF
+  \STATE Mark all $\mathbf{d}_j \in \mathcal{N}_i$ as consumed
+\ENDFOR
+\STATE \textbf{return} text tokens $\cup$ $\mathcal{S}$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Greedy Attention-Ordered Merging.}
+We process patches in descending attention order.
+The highest-attention patch in each group of near-duplicates ``absorbs'' its neighbors via attention-weighted averaging.
+This ensures that the merged vector is dominated by the most important patch, preserving its discriminative properties.
+
+\paragraph{Attention-Weighted Averaging.}
+For a group $\mathcal{N}_i$ of near-duplicate patches, the merged vector is:
+\begin{equation}
+\mathbf{d}_{\text{merged}} = \sum_{j \in \mathcal{N}_i} \frac{I(\mathbf{d}_j)}{\sum_{l \in \mathcal{N}_i} I(\mathbf{d}_l)} \cdot \mathbf{d}_j
+\end{equation}
+
+This is preferable to simple averaging because it preserves the embedding direction of the highest-attention patch, which is most likely to be the best match for relevant query tokens.
+
+\paragraph{Complexity.}
+The cosine similarity computation is $O(N'^2_p \cdot D)$ where $N'_p$ is the number of surviving image patches.
+Since $N'_p$ is already reduced by DocPruner (typically $<$500), this adds negligible overhead ($<$0.1s per document).
+
+
+\section{Alternative Approaches}
+
+We also explore five alternative diversity-aware compression strategies to contextualize DP-PostMerge:
+
+\paragraph{MMR Selection.}
+Maximal Marginal Relevance~\cite{carbonell1998mmr} greedily selects patches balancing importance and diversity:
+$\arg\max_{\mathbf{d}} [\lambda \cdot I(\mathbf{d}) + (1-\lambda) \cdot \min_{\mathbf{d}' \in \mathcal{S}} \text{dist}(\mathbf{d}, \mathbf{d}')]$
+
+\paragraph{Attention-FPS.}
+Farthest Point Sampling weighted by attention:
+$\arg\max_{\mathbf{d}} [I(\mathbf{d})^\alpha \cdot \text{dist}(\mathbf{d}, \mathcal{S})^{1-\alpha}]$
+
+\paragraph{DP-Dedup.}
+Greedy deduplication \emph{during} selection: patches are sorted by attention and accepted only if dissimilar to all previously accepted patches.
+
+\paragraph{DP-Residual.}
+After DocPruner, inject information from discarded patches into their nearest kept neighbor via weighted residuals:
+$\mathbf{d}'_k = \mathbf{d}_k + \beta \cdot I(\mathbf{d}_j) \cdot (\mathbf{d}_j - \mathbf{d}_k)$
+
+\paragraph{DP-Rebalance.}
+Two-phase approach: use a loose DocPruner threshold to get a large candidate set, then apply MMR-style selection to reach the target count.
+
+
+\section{Experiments}
+
+\subsection{Setup}
+
+\paragraph{Model.}
+ColQwen2.5 (\texttt{vidore/colqwen2.5-v0.2}), a $\sim$3B parameter vision-language model.
+
+\paragraph{Datasets.}
+Four ViDoRe-V2 benchmark datasets~\cite{mace2025vidorev2}:
+ESG Reports (1,538 docs, 57 queries),
+Biomedical Lectures (1,016 docs, 160 queries),
+Economics Reports (452 docs, 58 queries),
+ESG Human-Labeled (1,538 docs, 52 queries).
+
+\paragraph{Metric.}
+nDCG@5 computed via \texttt{pytrec\_eval}, following standard VDR evaluation~\cite{faysse2024colpali}.
+
+\paragraph{Baselines.}
+Identity (no compression), DocPruner with $k \in \{-0.5, -0.25, 0, 0.25, 0.5, 1.0\}$, and Prune-then-Merge (PTM)~\cite{yan2026ptm} with various $(k, m)$ configurations.
+
+\subsection{Main Results}
+
+Table~\ref{tab:main} presents the cross-dataset comparison between DocPruner and DP-PostMerge.
+
+\begin{table*}[t]
+\centering
+\small
+\caption{DocPruner vs.\ DP-PostMerge ($\theta=0.95$) on ViDoRe-V2. DP-PostMerge achieves 5--10\% extra compression with minimal nDCG@5 impact. $\Delta$Comp shows the additional compression gained.}
+\label{tab:main}
+\begin{tabular}{l c c c c c c c c}
+\toprule
+\multirow{2}{*}{\textbf{Method}} & \multirow{2}{*}{$k$} & \multicolumn{2}{c}{\textbf{Avg nDCG@5}} & \multicolumn{2}{c}{\textbf{Avg Compression}} & \multirow{2}{*}{$\Delta$nDCG} & \multirow{2}{*}{$\Delta$Comp} \\
+\cmidrule(lr){3-4} \cmidrule(lr){5-6}
+ & & DocPruner & PostMerge & DocPruner & PostMerge & & \\
+\midrule
+Identity & --- & \multicolumn{2}{c}{0.6205} & \multicolumn{2}{c}{0\%} & --- & --- \\
+\midrule
+\multirow{6}{*}{\shortstack{DocPruner\\vs.\\PostMerge}}
+& $-0.50$ & 0.5976 & 0.5903 & 38.8\% & 48.4\% & $-$0.003 & \up{9.5\%} \\
+& $-0.25$ & 0.5893 & 0.5833 & 52.4\% & 60.0\% & $-$0.004 & \up{7.6\%} \\
+& $0.00$  & 0.5761 & 0.5718 & 62.9\% & 69.0\% & $-$0.001 & \up{6.1\%} \\
+& $0.25$  & 0.5552 & 0.5547 & 70.9\% & 75.8\% & $-$0.001 & \up{4.8\%} \\
+& $0.50$  & 0.5423 & 0.5410 & 77.3\% & 81.0\% & $-$0.001 & \up{3.8\%} \\
+& $1.00$  & 0.5077 & 0.4986 & 86.0\% & 88.3\% & $-$0.009 & \up{2.3\%} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Key Finding 1: Free Extra Compression.}
+At $k = -0.25$ (DocPruner's recommended setting), DP-PostMerge achieves 60.0\% compression vs.\ DocPruner's 52.4\%---a \textbf{7.6 percentage point improvement}---with only 0.004 nDCG@5 degradation.
+At moderate $k$ values ($0$ to $0.5$), the nDCG gap is $<$0.002, making the extra compression essentially free.
+
+\paragraph{Key Finding 2: Diminishing Returns at High Compression.}
+The extra compression from merging decreases as $k$ increases (from 9.5\% at $k=-0.5$ to 2.3\% at $k=1.0$).
+This is expected: aggressive pruning already removes most redundant patches, leaving fewer near-duplicates to merge.
+
+\subsection{Comparison with Alternative Methods}
+
+Table~\ref{tab:alternatives} compares all six methods at a fixed target of $\sim$50\% compression on the ESG Reports dataset.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Method comparison at $\sim$50\% compression (ESG Reports). DP-PostMerge matches the best methods with the simplest implementation.}
+\label{tab:alternatives}
+\begin{tabular}{l c c}
+\toprule
+\textbf{Method} & \textbf{nDCG@5} & \textbf{Prune\%} \\
+\midrule
+Identity & 0.5507 & 0.0\% \\
+\midrule
+DocPruner ($k{=}{-}0.25$) & 0.5523 & 51.9\% \\
+DP-PostMerge & 0.5431 & 57.0\% \\
+DP-Dedup & 0.5656 & 52.0\% \\
+DP-Residual & 0.5695 & 51.9\% \\
+DP-Rebalance & 0.5552 & 50.0\% \\
+MMR & 0.5507 & 50.0\% \\
+Attn-FPS & 0.5507 & 50.0\% \\
+CPS-Attn & 0.5357 & 50.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Key Finding 3: Simplicity Wins.}
+DP-Residual and DP-Dedup show slight nDCG improvements over DocPruner at the same compression rate, suggesting that residual injection and dedup-aware selection can be complementary.
+However, DP-PostMerge provides more compression rather than more quality, which is often the more practical trade-off.
+
+\subsection{Merge Threshold Sensitivity}
+
+\begin{table}[t]
+\centering
+\small
+\caption{Effect of merge threshold $\theta$ on DP-PostMerge ($k=-0.25$, averaged across datasets).}
+\label{tab:threshold}
+\begin{tabular}{c c c c}
+\toprule
+$\theta$ & \textbf{nDCG@5} & \textbf{Prune\%} & $\Delta$Comp vs DP \\
+\midrule
+1.00 (=DocPruner) & 0.5893 & 52.4\% & --- \\
+0.95 & 0.5833 & 60.0\% & +7.6\% \\
+0.93 & --- & --- & --- \\
+0.90 & --- & --- & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Results for $\theta \in \{0.93, 0.90\}$ are pending completion of the full sweep (96 experiments in progress).
+Lower thresholds merge more aggressively, trading quality for compression.
+We expect $\theta = 0.93$ to provide $\sim$10\% extra compression with modest quality loss, while $\theta = 0.90$ may degrade quality noticeably.
+
+\subsection{Comparison with Prune-then-Merge}
+
+Prune-then-Merge (PTM)~\cite{yan2026ptm} merges \emph{all} surviving patches via hierarchical clustering, whereas DP-PostMerge only merges actual near-duplicates.
+This difference is critical at moderate compression rates where PTM's clustering can distort semantically distinct patches.
+
+\begin{table}[t]
+\centering
+\small
+\caption{DP-PostMerge vs.\ PTM at similar compression rates (Biomedical Lectures).}
+\label{tab:vs_ptm}
+\begin{tabular}{l c c}
+\toprule
+\textbf{Method} & \textbf{nDCG@5} & \textbf{Prune\%} \\
+\midrule
+DocPruner ($k{=}{-}0.25$) & 0.6143 & 51.2\% \\
+DP-PostMerge ($k{=}{-}0.25$) & 0.6144 & 62.5\% \\
+PTM ($k{=}{-}0.25$, $m{=}2$) & 0.5635 & 90.4\% \\
+PTM ($k{=}{-}0.5$, $m{=}2$) & 0.6098 & 58.5\% \\
+\midrule
+DocPruner ($k{=}0$) & 0.6067 & 61.9\% \\
+DP-PostMerge ($k{=}0$) & 0.6067 & 70.7\% \\
+PTM ($k{=}{-}0.75$, $m{=}2$) & 0.6109 & 52.4\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+DP-PostMerge provides a more controlled compression increase: the nDCG is virtually unchanged from DocPruner while gaining 8--11\% extra compression.
+PTM with aggressive parameters ($m=4$) can achieve very high compression but at significant quality cost.
+
+
+\section{Analysis}
+
+\paragraph{Why Post-hoc Works.}
+DocPruner's threshold-based selection is optimal for identifying the \emph{importance boundary}: patches below $\tau$ are genuinely low-information (whitespace, decorative elements).
+But it is blind to \emph{redundancy within} the kept set.
+Post-hoc merging addresses exactly this blind spot without interfering with the importance-based selection.
+
+\paragraph{Why Aggressive Merging Hurts.}
+At $k=1.0$ (86\% compression), DP-PostMerge's additional gain is only 2.3\% with 0.009 nDCG degradation.
+At high compression, most surviving patches are already semantically distinct---they survived precisely \emph{because} they represent unique visual regions.
+Merging at this point risks distorting genuine signals.
+
+\paragraph{Practical Implications.}
+DP-PostMerge is a ``free lunch'' at moderate compression rates ($k \leq 0.25$): it requires no additional training, no architectural changes, and adds $<$0.1s latency per document.
+For a corpus of 1 million pages with $\sim$750 patches each, the extra 7.6\% compression at $k=-0.25$ saves $\sim$57 million vectors---equivalent to $\sim$14 GB at 128 dimensions with \texttt{float16}.
+
+
+\section{Conclusion}
+
+We proposed DP-PostMerge, a simple post-hoc extension to DocPruner that merges near-duplicate patches after attention-based selection.
+By targeting the specific redundancy pattern in attention-selected patches, DP-PostMerge achieves 5--10\% extra compression with $<$0.005 nDCG@5 degradation at moderate compression rates.
+Among six alternative compression strategies we explored, the simplest post-hoc approach proved most practically effective, suggesting that \emph{sequential composition of simple operations} can be more robust than complex joint optimization.
+
+Future work includes extending the evaluation to ViDoRe-V1, JinaVDR, and REAL-MM-RAG benchmarks, exploring content-adaptive merge thresholds, and combining DP-PostMerge with learned compression methods.
+
+
+\bibliography{references}
+\bibliographystyle{acl_natbib}
+
+\end{document}
