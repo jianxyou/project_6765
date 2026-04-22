@@ -93,6 +93,9 @@ def dp_postmerge_compress(embeddings: torch.Tensor,
 
     merged_vectors = []
     merged = torch.zeros(n_kept, dtype=torch.bool)  # track which patches are consumed
+    labels = torch.full((n_kept,), -1, dtype=torch.long)  # cluster id per kept patch
+    is_rep = torch.zeros(n_kept, dtype=torch.bool)  # True = anchor of its cluster
+    cluster_id = 0
 
     for i in range(n_kept):
         idx = order[i].item()
@@ -108,19 +111,28 @@ def dp_postmerge_compress(embeddings: torch.Tensor,
             # No duplicates, keep as-is
             merged_vectors.append(kept_emb[idx])
             merged[idx] = True
+            labels[idx] = cluster_id
+            is_rep[idx] = True
         else:
-            # Merge via attention-weighted average
+            # Merge via attention-weighted average; anchor = idx (highest attention)
             group_emb = kept_emb[similar_indices].float()
             group_attn = kept_attn[similar_indices].float()
             weights = group_attn / group_attn.sum()
             merged_vec = (group_emb * weights.unsqueeze(1)).sum(dim=0)
             merged_vectors.append(merged_vec.to(orig_dtype))
             merged[similar_indices] = True
+            labels[similar_indices] = cluster_id
+            is_rep[idx] = True  # anchor only
+        cluster_id += 1
 
     # Step 4: Assemble result
     merged_img = torch.stack(merged_vectors)
     text_emb = embeddings[text_indices]
     result = torch.cat([text_emb, merged_img], dim=0)
+
+    # kept_indices are in image_pad-subset coordinates (position of each kept patch
+    # among all image_pad patches, in original order)
+    kept_local = keep_mask.nonzero(as_tuple=True)[0]
 
     n_after = merged_img.shape[0]
     return PruneResult(
@@ -128,4 +140,7 @@ def dp_postmerge_compress(embeddings: torch.Tensor,
         pruning_ratio=1.0 - (n_after / n_img),
         num_before=n_img,
         num_after=n_after,
+        kept_indices=kept_local,
+        cluster_labels=labels,
+        representative_mask=is_rep,
     )

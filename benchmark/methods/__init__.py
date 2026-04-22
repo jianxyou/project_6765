@@ -21,6 +21,11 @@ from .dp_rebalance import dp_rebalance_compress
 from .dp_residual import dp_residual_compress
 from .dp_dedup import dp_dedup_compress
 from .dp_postmerge import dp_postmerge_compress
+from .ptm_postmerge import ptm_postmerge_compress
+from .sem_cluster import sem_cluster_compress
+from .pooling_1d import pool1d_compress
+from .attn_similarity import attn_similarity_compress
+from .merge_then_prune import merge_then_prune_compress
 
 # name -> (compress_fn, needs_attention)
 METHODS = {
@@ -41,6 +46,11 @@ METHODS = {
     "dp_residual":   (dp_residual_compress,    True),
     "dp_dedup":      (dp_dedup_compress,       True),
     "dp_postmerge":  (dp_postmerge_compress,   True),
+    "ptm_postmerge": (ptm_postmerge_compress,  True),
+    "sem_cluster":   (sem_cluster_compress,    False),
+    "pool1d":        (pool1d_compress,         False),
+    "attn_similarity": (attn_similarity_compress, True),
+    "merge_then_prune": (merge_then_prune_compress, True),
 }
 
 

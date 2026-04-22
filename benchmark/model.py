@@ -68,7 +68,8 @@ def load_colqwen25(model_name: str, device: torch.device,
 def embed_images_with_attention(
     model, processor, images: List[Image.Image],
     device: torch.device, extract_attention: bool = False,
-) -> Tuple[List[torch.Tensor], Optional[List[torch.Tensor]], Optional[List[torch.Tensor]]]:
+) -> Tuple[List[torch.Tensor], Optional[List[torch.Tensor]],
+           Optional[List[torch.Tensor]], Optional[List[Tuple[int, int]]]]:
     """
     Encode document images, optionally extract EOS attention scores.
 
@@ -76,6 +77,8 @@ def embed_images_with_attention(
         emb_list:  [Tensor[seq_len, D], ...]
         attn_list: [Tensor[seq_len], ...] or None
         mask_list: [Tensor[seq_len], ...] (True = image_pad token)
+        grid_list: [(H, W), ...] post-spatial-merge grid dimensions per image,
+                   or None if not available from the processor
     """
     batch = processor.process_images(images).to(device)
     input_ids = batch["input_ids"]
@@ -106,7 +109,19 @@ def embed_images_with_attention(
         for j in range(embeddings.shape[0]):
             attn_list.append(eos_attn[j, :embeddings.shape[1]].detach().cpu().float())
 
-    return emb_list, attn_list, mask_list
+    # Extract post-merge grid (H, W) per image from image_grid_thw
+    grid_list = None
+    if "image_grid_thw" in batch:
+        thw = batch["image_grid_thw"].detach().cpu()
+        merge_size = getattr(
+            getattr(model.config, "vision_config", None), "spatial_merge_size", 2
+        ) or 2
+        grid_list = []
+        for j in range(thw.shape[0]):
+            t, h, w = thw[j].tolist()
+            grid_list.append((h // merge_size, w // merge_size))
+
+    return emb_list, attn_list, mask_list, grid_list
 
 
 @torch.no_grad()
@@ -119,18 +134,20 @@ def embed_queries(model, processor, queries: List[str],
 
 def encode_corpus(model, processor, images: List[Image.Image],
                   device: torch.device, batch_size: int = 4):
-    """Encode full corpus with attention extraction. Returns (emb_list, attn_list, mask_list)."""
-    all_emb, all_attn, all_mask = [], [], []
+    """Encode full corpus with attention extraction.
+    Returns (emb_list, attn_list, mask_list, grid_list)."""
+    all_emb, all_attn, all_mask, all_grid = [], [], [], []
     for i in tqdm(range(0, len(images), batch_size), desc="Embedding docs"):
         batch_imgs = images[i:i + batch_size]
-        embs, attns, masks = embed_images_with_attention(
+        embs, attns, masks, grids = embed_images_with_attention(
             model, processor, batch_imgs, device=device, extract_attention=True,
         )
         for j, emb in enumerate(embs):
             all_emb.append(emb)
             all_attn.append(attns[j] if attns else None)
             all_mask.append(masks[j] if masks else None)
-    return all_emb, all_attn, all_mask
+            all_grid.append(grids[j] if grids else None)
+    return all_emb, all_attn, all_mask, all_grid
 
 
 def encode_queries(model, processor, texts: List[str],

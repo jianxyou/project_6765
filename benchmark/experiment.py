@@ -81,9 +81,10 @@ def run_experiment(config: dict) -> dict:
     cache_emb = Path(f"{cache_prefix}_emb.pt")
     cache_attn = Path(f"{cache_prefix}_attn.pt")
     cache_mask = Path(f"{cache_prefix}_imgpad_mask.pt")
+    cache_grid = Path(f"{cache_prefix}_grid.pt")
 
     if cfg["clear_cache"]:
-        for p in [cache_emb, cache_attn, cache_mask]:
+        for p in [cache_emb, cache_attn, cache_mask, cache_grid]:
             if p.exists():
                 p.unlink()
 
@@ -92,13 +93,14 @@ def run_experiment(config: dict) -> dict:
         doc_emb_list = torch.load(cache_emb, weights_only=False)
         doc_attn_list = torch.load(cache_attn, weights_only=False) if cache_attn.exists() else [None] * len(doc_emb_list)
         doc_mask_list = torch.load(cache_mask, weights_only=False) if cache_mask.exists() else [None] * len(doc_emb_list)
+        doc_grid_list = torch.load(cache_grid, weights_only=False) if cache_grid.exists() else [None] * len(doc_emb_list)
         print(f"  Loaded {len(doc_emb_list)} docs from cache")
     else:
         print(f"\n[2/5] Loading ColQwen2.5 (eager mode)...")
         model, processor = load_colqwen25(cfg["model_name"], device=device, need_attention=True)
 
         print(f"\n[3/5] Encoding corpus ({n_corpus} docs)...")
-        doc_emb_list, doc_attn_list, doc_mask_list = encode_corpus(
+        doc_emb_list, doc_attn_list, doc_mask_list, doc_grid_list = encode_corpus(
             model, processor, corpus_images, device, batch_size=cfg["batch_doc"])
 
         avg_patches = sum(e.shape[0] for e in doc_emb_list) / max(1, len(doc_emb_list))
@@ -107,6 +109,7 @@ def run_experiment(config: dict) -> dict:
         torch.save(doc_emb_list, cache_emb)
         torch.save(doc_attn_list, cache_attn)
         torch.save(doc_mask_list, cache_mask)
+        torch.save(doc_grid_list, cache_grid)
         print(f"  Cache saved to {cache_dir}")
 
     # 4. Prune
@@ -153,6 +156,8 @@ def run_experiment(config: dict) -> dict:
             kwargs["entropy_threshold"] = ent_threshold
         if cfg["pruner"] == "learned":
             kwargs["proj_model"] = proj_model
+        if cfg["pruner"] == "pool2d":
+            kwargs["grid_hw"] = doc_grid_list[i] if i < len(doc_grid_list) else None
 
         result = compress_fn(
             doc_emb_list[i],
@@ -244,6 +249,16 @@ def _make_suffix(cfg: dict) -> str:
         return f"dp_postmerge_k{cfg.get('k', -0.25)}_t{t}"
     if pruner == "dp_dedup":
         return f"dp_dedup_k{cfg.get('k', -0.25)}"
+    if pruner == "random":
+        return f"random_r{cfg.get('ratio', 0.5)}"
+    if pruner in ("sem_cluster", "pool1d", "pool2d"):
+        return f"{pruner}_mf{cfg.get('merging_factor', 4)}"
+    if pruner == "attn_similarity":
+        return f"attn_similarity_k{cfg.get('k', -0.25)}_a{cfg.get('alpha', 0.5)}"
+    if pruner == "pivot_threshold":
+        return (f"pivot_threshold_k{cfg.get('k', -0.25)}"
+                f"_kd{cfg.get('k_dup', 0.0)}"
+                f"_np{cfg.get('num_pivots', 10)}")
     # For any method that uses k, include it in suffix
     if "k" in cfg:
         return f"{pruner}_k{cfg['k']}"

@@ -58,9 +58,13 @@ def docpruner_compress(embeddings: torch.Tensor,
     pruned = embeddings[all_kept]
 
     n_kept = kept_img.shape[0]
+    kept_local = keep_mask.nonzero(as_tuple=True)[0]  # indices into image_pad subset
     return PruneResult(
         vectors=pruned,
         pruning_ratio=1.0 - (n_kept / n_img),
         num_before=n_img,
         num_after=n_kept,
+        kept_indices=kept_local,
+        cluster_labels=torch.arange(n_kept, dtype=torch.long),
+        representative_mask=torch.ones(n_kept, dtype=torch.bool),
     )

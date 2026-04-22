@@ -128,6 +128,14 @@ def cmd_run(args):
         config["k"] = args.ptm_k  # PTM uses 'k' param
     if args.ptm_m is not None:
         config["m"] = args.ptm_m
+    if args.merging_factor is not None:
+        config["merging_factor"] = args.merging_factor
+    if args.alpha is not None:
+        config["alpha"] = args.alpha
+    if args.k_dup is not None:
+        config["k_dup"] = args.k_dup
+    if args.num_pivots is not None:
+        config["num_pivots"] = args.num_pivots
 
     run_experiment(config)
 
@@ -198,6 +206,14 @@ def main():
     p_run.add_argument("--ratio", type=float, default=None, help="Random prune ratio")
     p_run.add_argument("--ptm-k", type=float, default=None, help="PTM pruning k")
     p_run.add_argument("--ptm-m", type=int, default=None, help="PTM merging factor")
+    p_run.add_argument("--merging-factor", type=int, default=None,
+                       help="sem_cluster / pool1d / pool2d merging factor")
+    p_run.add_argument("--alpha", type=float, default=None,
+                       help="attn_similarity weighting factor")
+    p_run.add_argument("--k-dup", type=float, default=None,
+                       help="pivot_threshold dedup factor")
+    p_run.add_argument("--num-pivots", type=int, default=None,
+                       help="pivot_threshold number of pivots")
 
     # --- sweep ---
     p_sweep = sub.add_parser("sweep", help="Run a preset sweep of experiments")
